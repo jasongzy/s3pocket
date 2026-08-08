@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" role="img" aria-label="S3 Pocket icon">
+  <rect width="108" height="108" rx="24" fill="#5146D8"/>
+  <path fill="#665DF0" d="M24 0h60a24 24 0 0 1 24 24v30H0V24A24 24 0 0 1 24 0z"/>
+  <path fill="#FFF" d="M32 29h44a6 6 0 0 1 6 6v5H26v-5a6 6 0 0 1 6-6zm-5 8h54v34a18 18 0 0 1-18 18H45a18 18 0 0 1-18-18V37z"/>
+  <path fill="#5146D8" d="M35 48h12v12H35zm13 0h12v12H48zm13 0h12v12H61zM41.5 62h12v12h-12zm13 0h12v12h-12z"/>
+</svg>

@@ -9,6 +9,12 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -18,9 +24,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -56,6 +62,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -66,6 +74,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import com.jasongzy.s3pocket.R
+import com.jasongzy.s3pocket.data.GalleryImageScale
+import com.jasongzy.s3pocket.data.GalleryThumbnailSize
 import com.jasongzy.s3pocket.data.ObjectSortMode
 import com.jasongzy.s3pocket.data.ObjectViewMode
 import com.jasongzy.s3pocket.data.ProfileRepository
@@ -154,12 +164,20 @@ fun ObjectsScreen(
   val sort by settingsRepository.objectSort.collectAsStateWithLifecycle(ObjectSortMode.NAME)
   val ascending by settingsRepository.objectSortAscending.collectAsStateWithLifecycle(true)
   val viewMode by settingsRepository.objectViewMode.collectAsStateWithLifecycle(ObjectViewMode.LIST)
+  val galleryThumbnailSize by settingsRepository.galleryThumbnailSize.collectAsStateWithLifecycle(GalleryThumbnailSize.MEDIUM)
+  val galleryImageScale by settingsRepository.galleryImageScale.collectAsStateWithLifecycle(GalleryImageScale.FIT)
   var showMore by remember { mutableStateOf(false) }
+  var showGalleryOptions by remember { mutableStateOf(false) }
   var showUploadSources by remember { mutableStateOf(false) }
   var showUrlUpload by remember { mutableStateOf(false) }
   var searchActive by remember(prefix) { mutableStateOf(false) }
   var query by remember(prefix) { mutableStateOf("") }
+  val searchFocusRequester = remember { FocusRequester() }
   var showPathMenu by remember { mutableStateOf(false) }
+  fun closeSearch() {
+    searchActive = false
+    query = ""
+  }
   val displayedObjects = remember(state.objects, sort, ascending, query) {
     val comparator = when (sort) {
       ObjectSortMode.NAME -> compareBy<ObjectItem> { it.name.lowercase() }
@@ -175,6 +193,9 @@ fun ObjectsScreen(
       query.isNotBlank() || sort != ObjectSortMode.NAME || !ascending,
     )
   }
+  LaunchedEffect(searchActive) {
+    if (searchActive) searchFocusRequester.requestFocus()
+  }
   val unknownFileSize = stringResource(R.string.unknown_file_size)
   val currentFavorite = remember(profileId, bucket, prefix) {
     FavoriteItem(
@@ -186,7 +207,7 @@ fun ObjectsScreen(
   }
   val currentPathIsFavorite = favorites.any { it.id == currentFavorite.id }
   BackHandler(enabled = selectedKeys.isNotEmpty() || searchActive) {
-    if (selectedKeys.isNotEmpty()) selectedKeys = emptySet() else { searchActive = false; query = "" }
+    if (selectedKeys.isNotEmpty()) selectedKeys = emptySet() else closeSearch()
   }
   val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
     if (uri != null) {
@@ -262,39 +283,55 @@ fun ObjectsScreen(
         title = {
           if (selectedKeys.isNotEmpty()) {
             Text(pluralStringResource(R.plurals.selected_count, selectedKeys.size, selectedKeys.size))
-          } else if (searchActive) {
-            TextField(
-              value = query,
-              onValueChange = { query = it },
-              placeholder = { Text(stringResource(R.string.search_hint)) },
-              singleLine = true,
-              modifier = Modifier.fillMaxWidth(),
-            )
           } else {
-            Box {
-              Row(
-                modifier = Modifier.clickable { showPathMenu = true },
-                verticalAlignment = Alignment.CenterVertically,
+            Box(modifier = Modifier.fillMaxWidth()) {
+              AnimatedVisibility(
+                visible = !searchActive,
+                enter = fadeIn(tween(120)),
+                exit = fadeOut(tween(90)),
               ) {
-                Column {
-                  Text(if (prefix.isEmpty()) bucket else prefix.removeSuffix("/").substringAfterLast('/'))
-                  Text(if (prefix.isEmpty()) stringResource(R.string.bucket_root) else prefix, style = MaterialTheme.typography.labelSmall)
+                Box {
+                  Row(
+                    modifier = Modifier.clickable { showPathMenu = true },
+                    verticalAlignment = Alignment.CenterVertically,
+                  ) {
+                    Column {
+                      Text(if (prefix.isEmpty()) bucket else prefix.removeSuffix("/").substringAfterLast('/'))
+                      Text(
+                        if (prefix.isEmpty()) stringResource(R.string.bucket_root) else prefix,
+                        style = MaterialTheme.typography.labelSmall,
+                      )
+                    }
+                    AppIcon(R.drawable.ms_arrow_drop_down_24, stringResource(R.string.path_navigation))
+                  }
+                  DropdownMenu(expanded = showPathMenu, onDismissRequest = { showPathMenu = false }) {
+                    pathEntries(bucket, prefix).forEach { (label, targetPrefix) ->
+                      DropdownMenuItem(
+                        text = { Text(label) },
+                        leadingIcon = {
+                          AppIcon(if (targetPrefix.isEmpty()) R.drawable.ms_database_24 else R.drawable.ms_folder_24, null)
+                        },
+                        onClick = {
+                          showPathMenu = false
+                          if (targetPrefix != prefix) onNavigateToPrefix(targetPrefix)
+                        },
+                      )
+                    }
+                  }
                 }
-                AppIcon(R.drawable.ms_arrow_drop_down_24, stringResource(R.string.path_navigation))
               }
-              DropdownMenu(expanded = showPathMenu, onDismissRequest = { showPathMenu = false }) {
-                pathEntries(bucket, prefix).forEach { (label, targetPrefix) ->
-                  DropdownMenuItem(
-                    text = { Text(label) },
-                    leadingIcon = {
-                      AppIcon(if (targetPrefix.isEmpty()) R.drawable.ms_database_24 else R.drawable.ms_folder_24, null)
-                    },
-                    onClick = {
-                      showPathMenu = false
-                      if (targetPrefix != prefix) onNavigateToPrefix(targetPrefix)
-                    },
-                  )
-                }
+              AnimatedVisibility(
+                visible = searchActive,
+                enter = expandHorizontally(tween(220), expandFrom = Alignment.End) + fadeIn(tween(140)),
+                exit = shrinkHorizontally(tween(180), shrinkTowards = Alignment.End) + fadeOut(tween(100)),
+              ) {
+                TextField(
+                  value = query,
+                  onValueChange = { query = it },
+                  placeholder = { Text(stringResource(R.string.search_hint)) },
+                  singleLine = true,
+                  modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester),
+                )
               }
             }
           }
@@ -303,76 +340,94 @@ fun ObjectsScreen(
           BackButton {
             when {
               selectedKeys.isNotEmpty() -> selectedKeys = emptySet()
-              searchActive -> { searchActive = false; query = "" }
+              searchActive -> closeSearch()
               else -> onBack()
             }
           }
         },
         actions = {
           if (selectedKeys.isEmpty()) {
-            if (searchActive) {
-              TooltipIconButton(stringResource(R.string.close), { searchActive = false; query = "" }) {
+            AnimatedVisibility(
+              visible = searchActive,
+              enter = fadeIn(tween(140)),
+              exit = fadeOut(tween(90)),
+            ) {
+              TooltipIconButton(stringResource(R.string.close), ::closeSearch) {
                 AppIcon(R.drawable.ms_close_24, null)
               }
-            } else {
-              TooltipIconButton(
-                stringResource(if (currentPathIsFavorite) R.string.remove_from_favorites else R.string.favorite_current_folder),
-                {
-                  viewModel.setFavorites(listOf(currentFavorite), !currentPathIsFavorite) {
-                    context.showFavoriteToast(!currentPathIsFavorite)
-                  }
-                },
-              ) {
-                AppIcon(if (currentPathIsFavorite) R.drawable.ms_star_24 else R.drawable.ms_star_outline_24, null)
-              }
-              TooltipIconButton(stringResource(R.string.create_folder), { createFolder = true }) {
-                AppIcon(R.drawable.ms_create_new_folder_24, null)
-              }
-              TooltipIconButton(stringResource(R.string.search_files), { searchActive = true }) {
-                AppIcon(R.drawable.ms_search_24, null)
-              }
-              TooltipIconButton(
-                stringResource(if (viewMode == ObjectViewMode.LIST) R.string.gallery_view else R.string.list_view),
-                {
-                  viewModel.setViewMode(
-                    if (viewMode == ObjectViewMode.LIST) ObjectViewMode.GALLERY else ObjectViewMode.LIST,
-                  )
-                },
-              ) {
-                AppIcon(if (viewMode == ObjectViewMode.LIST) R.drawable.ms_grid_view_24 else R.drawable.ms_view_list_24, null)
-              }
-              Box {
-              TooltipIconButton(stringResource(R.string.more_actions), { showMore = true }) {
-                AppIcon(R.drawable.ms_more_vert_24, null)
-              }
-              DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
-                DropdownMenuItem(
-                  text = { Text(stringResource(R.string.refresh)) },
-                  leadingIcon = { AppIcon(R.drawable.ms_refresh_24, null) },
-                  onClick = { showMore = false; viewModel.refresh() },
-                )
-                ObjectSortMode.entries.forEach { option ->
-                  DropdownMenuItem(
-                    text = { Text(stringResource(when (option) {
-                      ObjectSortMode.NAME -> R.string.sort_name
-                      ObjectSortMode.DATE -> R.string.sort_date
-                      ObjectSortMode.SIZE -> R.string.sort_size
-                    })) },
-                    leadingIcon = { RadioButton(selected = sort == option, onClick = null) },
-                    onClick = { showMore = false; viewModel.setSort(option, ascending) },
-                  )
+            }
+            AnimatedVisibility(
+              visible = !searchActive,
+              enter = expandHorizontally(tween(180), expandFrom = Alignment.End) + fadeIn(tween(120)),
+              exit = shrinkHorizontally(tween(180), shrinkTowards = Alignment.End) + fadeOut(tween(90)),
+            ) {
+              Row {
+                TooltipIconButton(
+                  stringResource(if (currentPathIsFavorite) R.string.remove_from_favorites else R.string.favorite_current_folder),
+                  {
+                    viewModel.setFavorites(listOf(currentFavorite), !currentPathIsFavorite) {
+                      context.showFavoriteToast(!currentPathIsFavorite)
+                    }
+                  },
+                ) {
+                  AppIcon(if (currentPathIsFavorite) R.drawable.ms_star_24 else R.drawable.ms_star_outline_24, null)
                 }
-                DropdownMenuItem(
-                  text = { Text(stringResource(R.string.sort_ascending)) },
-                  leadingIcon = { RadioButton(selected = ascending, onClick = null) },
-                  onClick = { showMore = false; viewModel.setSort(sort, true) },
-                )
-                DropdownMenuItem(
-                  text = { Text(stringResource(R.string.sort_descending)) },
-                  leadingIcon = { RadioButton(selected = !ascending, onClick = null) },
-                  onClick = { showMore = false; viewModel.setSort(sort, false) },
-                )
-              }
+                TooltipIconButton(stringResource(R.string.create_folder), { createFolder = true }) {
+                  AppIcon(R.drawable.ms_create_new_folder_24, null)
+                }
+                TooltipIconButton(stringResource(R.string.search_files), { searchActive = true }) {
+                  AppIcon(R.drawable.ms_search_24, null)
+                }
+                TooltipIconButton(
+                  stringResource(if (viewMode == ObjectViewMode.LIST) R.string.gallery_view else R.string.list_view),
+                  {
+                    viewModel.setViewMode(
+                      if (viewMode == ObjectViewMode.LIST) ObjectViewMode.GALLERY else ObjectViewMode.LIST,
+                    )
+                  },
+                ) {
+                  AppIcon(if (viewMode == ObjectViewMode.LIST) R.drawable.ms_grid_view_24 else R.drawable.ms_view_list_24, null)
+                }
+                Box {
+                  TooltipIconButton(stringResource(R.string.more_actions), { showMore = true }) {
+                    AppIcon(R.drawable.ms_more_vert_24, null)
+                  }
+                  DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
+                    DropdownMenuItem(
+                      text = { Text(stringResource(R.string.refresh)) },
+                      leadingIcon = { AppIcon(R.drawable.ms_refresh_24, null) },
+                      onClick = { showMore = false; viewModel.refresh() },
+                    )
+                    ObjectSortMode.entries.forEach { option ->
+                      DropdownMenuItem(
+                        text = { Text(stringResource(when (option) {
+                          ObjectSortMode.NAME -> R.string.sort_name
+                          ObjectSortMode.DATE -> R.string.sort_date
+                          ObjectSortMode.SIZE -> R.string.sort_size
+                        })) },
+                        leadingIcon = { RadioButton(selected = sort == option, onClick = null) },
+                        onClick = { showMore = false; viewModel.setSort(option, ascending) },
+                      )
+                    }
+                    DropdownMenuItem(
+                      text = { Text(stringResource(R.string.sort_ascending)) },
+                      leadingIcon = { RadioButton(selected = ascending, onClick = null) },
+                      onClick = { showMore = false; viewModel.setSort(sort, true) },
+                    )
+                    DropdownMenuItem(
+                      text = { Text(stringResource(R.string.sort_descending)) },
+                      leadingIcon = { RadioButton(selected = !ascending, onClick = null) },
+                      onClick = { showMore = false; viewModel.setSort(sort, false) },
+                    )
+                    if (viewMode == ObjectViewMode.GALLERY) {
+                      DropdownMenuItem(
+                        text = { Text(stringResource(R.string.gallery_options)) },
+                        leadingIcon = { AppIcon(R.drawable.ms_grid_view_24, null) },
+                        onClick = { showMore = false; showGalleryOptions = true },
+                      )
+                    }
+                  }
+                }
               }
             }
           } else {
@@ -517,7 +572,7 @@ fun ObjectsScreen(
             PaddingValues(),
           )
         viewMode == ObjectViewMode.GALLERY -> LazyVerticalGrid(
-          columns = GridCells.Adaptive(150.dp),
+          columns = GridCells.Fixed(galleryThumbnailSize.columns),
           contentPadding = PaddingValues(8.dp),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -527,6 +582,7 @@ fun ObjectsScreen(
               item = item,
               selected = item.key in selectedKeys,
               thumbnailUrl = { thumbnailUrls.get(profileId, bucket, item.key) },
+              imageScale = galleryImageScale,
               onClick = {
                 if (selectedKeys.isNotEmpty()) selectedKeys = selectedKeys.toggle(item.key)
                 else if (item.isFolder) onOpenFolder(item.key) else onOpenObject(item.key)
@@ -575,6 +631,16 @@ fun ObjectsScreen(
         }
       }
     }
+  }
+
+  if (showGalleryOptions) {
+    GalleryOptionsDialog(
+      thumbnailSize = galleryThumbnailSize,
+      imageScale = galleryImageScale,
+      onThumbnailSizeChange = viewModel::setGalleryThumbnailSize,
+      onImageScaleChange = viewModel::setGalleryImageScale,
+      onDismiss = { showGalleryOptions = false },
+    )
   }
 
   selected?.let { document ->
@@ -798,12 +864,66 @@ private fun ObjectItem.favorite(profileId: String, bucket: String): FavoriteItem
     kind = if (isFolder) FavoriteKind.FOLDER else FavoriteKind.FILE,
   )
 
+@Composable
+private fun GalleryOptionsDialog(
+  thumbnailSize: GalleryThumbnailSize,
+  imageScale: GalleryImageScale,
+  onThumbnailSizeChange: (GalleryThumbnailSize) -> Unit,
+  onImageScaleChange: (GalleryImageScale) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text(stringResource(R.string.gallery_options)) },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.thumbnail_size), style = MaterialTheme.typography.titleSmall)
+        GalleryThumbnailSize.entries.forEach { option ->
+          Row(
+            modifier = Modifier.fillMaxWidth().clickable { onThumbnailSizeChange(option) },
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            RadioButton(selected = thumbnailSize == option, onClick = null)
+            Text(stringResource(when (option) {
+              GalleryThumbnailSize.LARGE -> R.string.thumbnail_size_large
+              GalleryThumbnailSize.MEDIUM -> R.string.thumbnail_size_medium
+              GalleryThumbnailSize.SMALL -> R.string.thumbnail_size_small
+            }))
+          }
+        }
+        Text(stringResource(R.string.image_scaling), style = MaterialTheme.typography.titleSmall)
+        GalleryImageScale.entries.forEach { option ->
+          Row(
+            modifier = Modifier.fillMaxWidth().clickable { onImageScaleChange(option) },
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            RadioButton(selected = imageScale == option, onClick = null)
+            Column {
+              Text(stringResource(if (option == GalleryImageScale.CROP) R.string.image_scale_crop else R.string.image_scale_fit))
+              Text(
+                stringResource(
+                  if (option == GalleryImageScale.CROP) R.string.image_scale_crop_description
+                  else R.string.image_scale_fit_description,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+      }
+    },
+    confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) } },
+  )
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun GalleryObject(
   item: ObjectItem,
   selected: Boolean,
   thumbnailUrl: suspend () -> String,
+  imageScale: GalleryImageScale,
   onClick: () -> Unit,
   onLongClick: () -> Unit,
 ) {
@@ -819,13 +939,13 @@ private fun GalleryObject(
       .combinedClickable(onClick = onClick, onLongClick = onLongClick)
       .padding(8.dp),
   ) {
-    Box(Modifier.fillMaxWidth().height(112.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
       if (previewUrl != null) {
         AsyncImage(
           model = previewUrl,
           contentDescription = null,
           modifier = Modifier.fillMaxSize(),
-          contentScale = ContentScale.Crop,
+          contentScale = if (imageScale == GalleryImageScale.CROP) ContentScale.Crop else ContentScale.Fit,
         )
       } else {
         AppIcon(item.iconResource(), null, Modifier.size(42.dp), MaterialTheme.colorScheme.primary)

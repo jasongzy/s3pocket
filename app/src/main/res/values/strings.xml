@@ -260,4 +260,14 @@
     </plurals>
     <string name="gallery_view">Gallery view</string>
     <string name="list_view">List view</string>
+    <string name="gallery_options">Gallery options</string>
+    <string name="thumbnail_size">Thumbnail size</string>
+    <string name="thumbnail_size_large">Large</string>
+    <string name="thumbnail_size_medium">Medium</string>
+    <string name="thumbnail_size_small">Small</string>
+    <string name="image_scaling">Image scaling</string>
+    <string name="image_scale_crop">Crop</string>
+    <string name="image_scale_crop_description">Fill the thumbnail</string>
+    <string name="image_scale_fit">Fit</string>
+    <string name="image_scale_fit_description">Show the entire image</string>
 </resources>

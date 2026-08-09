@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import java.io.File
 import java.net.URL
 import com.jasongzy.s3pocket.data.AppLog
+import com.jasongzy.s3pocket.data.GalleryImageScale
+import com.jasongzy.s3pocket.data.GalleryThumbnailSize
 import com.jasongzy.s3pocket.data.ObjectSortMode
 import com.jasongzy.s3pocket.data.ObjectViewMode
 import com.jasongzy.s3pocket.data.ProfileRepository
@@ -506,6 +508,14 @@ class ObjectsViewModel(
 
   fun setViewMode(mode: ObjectViewMode) {
     viewModelScope.launch { settings.setObjectViewMode(mode) }
+  }
+
+  fun setGalleryThumbnailSize(size: GalleryThumbnailSize) {
+    viewModelScope.launch { settings.setGalleryThumbnailSize(size) }
+  }
+
+  fun setGalleryImageScale(scale: GalleryImageScale) {
+    viewModelScope.launch { settings.setGalleryImageScale(scale) }
   }
 
   fun setFavorites(items: List<FavoriteItem>, enabled: Boolean, onSaved: () -> Unit) {

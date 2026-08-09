@@ -43,6 +43,19 @@ enum class ObjectViewMode {
   GALLERY,
 }
 
+@Serializable
+enum class GalleryThumbnailSize(val columns: Int) {
+  LARGE(2),
+  MEDIUM(3),
+  SMALL(4),
+}
+
+@Serializable
+enum class GalleryImageScale {
+  CROP,
+  FIT,
+}
+
 class SettingsRepository(private val context: Context) {
   private val json = Json
   val themeMode: Flow<ThemeMode> =
@@ -72,6 +85,14 @@ class SettingsRepository(private val context: Context) {
   val objectViewMode: Flow<ObjectViewMode> =
     context.settingsDataStore.data.map { preferences ->
       preferences[OBJECT_VIEW_MODE]?.let(ObjectViewMode::valueOf) ?: ObjectViewMode.LIST
+    }
+  val galleryThumbnailSize: Flow<GalleryThumbnailSize> =
+    context.settingsDataStore.data.map { preferences ->
+      preferences[GALLERY_THUMBNAIL_SIZE]?.let(GalleryThumbnailSize::valueOf) ?: GalleryThumbnailSize.MEDIUM
+    }
+  val galleryImageScale: Flow<GalleryImageScale> =
+    context.settingsDataStore.data.map { preferences ->
+      preferences[GALLERY_IMAGE_SCALE]?.let(GalleryImageScale::valueOf) ?: GalleryImageScale.FIT
     }
   val filePreviewEnabled: Flow<Boolean> =
     context.settingsDataStore.data.map { it[FILE_PREVIEW_ENABLED] ?: true }
@@ -113,6 +134,14 @@ class SettingsRepository(private val context: Context) {
     context.settingsDataStore.edit { it[OBJECT_VIEW_MODE] = mode.name }
   }
 
+  suspend fun setGalleryThumbnailSize(size: GalleryThumbnailSize) {
+    context.settingsDataStore.edit { it[GALLERY_THUMBNAIL_SIZE] = size.name }
+  }
+
+  suspend fun setGalleryImageScale(scale: GalleryImageScale) {
+    context.settingsDataStore.edit { it[GALLERY_IMAGE_SCALE] = scale.name }
+  }
+
   suspend fun setFilePreviewEnabled(enabled: Boolean) {
     context.settingsDataStore.edit { it[FILE_PREVIEW_ENABLED] = enabled }
   }
@@ -139,6 +168,8 @@ class SettingsRepository(private val context: Context) {
     objectSort = objectSort.first(),
     objectSortAscending = objectSortAscending.first(),
     objectViewMode = objectViewMode.first(),
+    galleryThumbnailSize = galleryThumbnailSize.first(),
+    galleryImageScale = galleryImageScale.first(),
     filePreviewEnabled = filePreviewEnabled.first(),
     presignedUrlExpiryMinutes = presignedUrlExpiryMinutes.first(),
     allowRecursiveFolderDelete = allowRecursiveFolderDelete.first(),
@@ -155,6 +186,8 @@ class SettingsRepository(private val context: Context) {
       it[OBJECT_SORT] = snapshot.objectSort.name
       it[OBJECT_SORT_ASCENDING] = snapshot.objectSortAscending
       it[OBJECT_VIEW_MODE] = snapshot.objectViewMode.name
+      it[GALLERY_THUMBNAIL_SIZE] = snapshot.galleryThumbnailSize.name
+      it[GALLERY_IMAGE_SCALE] = snapshot.galleryImageScale.name
       it[FILE_PREVIEW_ENABLED] = snapshot.filePreviewEnabled
       it[PRESIGNED_URL_EXPIRY_MINUTES] = snapshot.presignedUrlExpiryMinutes.coerceIn(1, MAX_PRESIGNED_URL_EXPIRY_MINUTES)
       it[ALLOW_RECURSIVE_FOLDER_DELETE] = snapshot.allowRecursiveFolderDelete
@@ -170,6 +203,8 @@ class SettingsRepository(private val context: Context) {
     val OBJECT_SORT = stringPreferencesKey("object_sort")
     val OBJECT_SORT_ASCENDING = booleanPreferencesKey("object_sort_ascending")
     val OBJECT_VIEW_MODE = stringPreferencesKey("object_view_mode")
+    val GALLERY_THUMBNAIL_SIZE = stringPreferencesKey("gallery_thumbnail_size")
+    val GALLERY_IMAGE_SCALE = stringPreferencesKey("gallery_image_scale")
     val FILE_PREVIEW_ENABLED = booleanPreferencesKey("file_preview_enabled")
     val PRESIGNED_URL_EXPIRY_MINUTES = intPreferencesKey("presigned_url_expiry_minutes")
     val ALLOW_RECURSIVE_FOLDER_DELETE = booleanPreferencesKey("allow_recursive_folder_delete")
@@ -190,6 +225,8 @@ data class AppSettingsSnapshot(
   val objectSort: ObjectSortMode = ObjectSortMode.NAME,
   val objectSortAscending: Boolean = true,
   val objectViewMode: ObjectViewMode = ObjectViewMode.LIST,
+  val galleryThumbnailSize: GalleryThumbnailSize = GalleryThumbnailSize.MEDIUM,
+  val galleryImageScale: GalleryImageScale = GalleryImageScale.FIT,
   val filePreviewEnabled: Boolean = true,
   val presignedUrlExpiryMinutes: Int = DEFAULT_PRESIGNED_URL_EXPIRY_MINUTES,
   val allowRecursiveFolderDelete: Boolean = false,

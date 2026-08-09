@@ -242,4 +242,14 @@
     </plurals>
     <string name="gallery_view">图库视图</string>
     <string name="list_view">列表视图</string>
+    <string name="gallery_options">图库选项</string>
+    <string name="thumbnail_size">缩略图大小</string>
+    <string name="thumbnail_size_large">大图</string>
+    <string name="thumbnail_size_medium">中图</string>
+    <string name="thumbnail_size_small">小图</string>
+    <string name="image_scaling">图片显示</string>
+    <string name="image_scale_crop">裁剪填充</string>
+    <string name="image_scale_crop_description">填满缩略图区域</string>
+    <string name="image_scale_fit">完整显示</string>
+    <string name="image_scale_fit_description">缩放并显示整张图片</string>
 </resources>

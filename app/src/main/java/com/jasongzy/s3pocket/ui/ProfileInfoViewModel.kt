@@ -15,9 +15,14 @@ import kotlinx.coroutines.launch
 data class ProfileInfoUiState(
   val profile: StorageProfile? = null,
   val metrics: CloudflareMetrics? = null,
-  val isLoading: Boolean = true,
-  val error: String? = null,
-)
+  val isProfileLoading: Boolean = true,
+  val profileError: String? = null,
+  val isMetricsLoading: Boolean = false,
+  val metricsError: String? = null,
+) {
+  val canLoadMetrics: Boolean
+    get() = profile?.canLoadCloudflareMetrics() == true
+}
 
 class ProfileInfoViewModel(
   private val profileId: String,
@@ -28,25 +33,38 @@ class ProfileInfoViewModel(
   val state: StateFlow<ProfileInfoUiState> = _state
 
   init {
-    refresh()
+    loadProfile()
   }
 
-  fun refresh() {
+  private fun loadProfile() {
     viewModelScope.launch {
-      _state.update { it.copy(isLoading = true, error = null) }
       val profile = runSuspendCatching { profiles.get(profileId) }
         .getOrElse { error ->
-          _state.update { it.copy(isLoading = false, error = error.userMessage()) }
+          _state.update { it.copy(isProfileLoading = false, profileError = error.userMessage()) }
           return@launch
         }
-      _state.update { it.copy(profile = profile) }
-      if (profile.provider != StorageProvider.CLOUDFLARE_R2 || profile.managementApiToken.isBlank()) {
-        _state.update { it.copy(isLoading = false, metrics = null) }
-        return@launch
+      _state.update { it.copy(profile = profile, isProfileLoading = false) }
+      if (profile.canLoadCloudflareMetrics()) {
+        refreshMetrics()
       }
+    }
+  }
+
+  fun refreshMetrics() {
+    val profile = _state.value.profile?.takeIf(StorageProfile::canLoadCloudflareMetrics) ?: return
+    if (_state.value.isMetricsLoading) return
+    viewModelScope.launch {
+      _state.update { it.copy(isMetricsLoading = true, metricsError = null) }
       runSuspendCatching { metricsRepository.fetch(profile) }
-        .onSuccess { metrics -> _state.value = ProfileInfoUiState(profile, metrics, isLoading = false) }
-        .onFailure { error -> _state.update { it.copy(isLoading = false, error = error.userMessage()) } }
+        .onSuccess { metrics ->
+          _state.update { it.copy(metrics = metrics, isMetricsLoading = false) }
+        }
+        .onFailure { error ->
+          _state.update { it.copy(isMetricsLoading = false, metricsError = error.userMessage()) }
+        }
     }
   }
 }
+
+private fun StorageProfile.canLoadCloudflareMetrics(): Boolean =
+  provider == StorageProvider.CLOUDFLARE_R2 && managementApiToken.isNotBlank()

@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,8 +52,10 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -341,14 +344,56 @@ private fun CodePreview(code: String, language: String) {
       AppIcon(R.drawable.ms_content_copy_24, null)
     }
   }
+  var lineNumbers by remember(code, softWrap) { mutableStateOf(logicalLineNumbers(code)) }
   SelectionContainer {
-    Text(
-      text = highlighted ?: AnnotatedString(code),
+    Row(
       modifier = if (softWrap) Modifier.fillMaxWidth() else Modifier.horizontalScroll(horizontalScroll),
-      style = MaterialTheme.typography.bodySmall,
-      fontFamily = FontFamily.Monospace,
-      softWrap = softWrap,
-    )
+      verticalAlignment = Alignment.Top,
+    ) {
+      Text(
+        text = lineNumbers,
+        modifier = Modifier.width(36.dp),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+        fontFamily = FontFamily.Monospace,
+        textAlign = TextAlign.End,
+        softWrap = false,
+      )
+      Spacer(Modifier.width(12.dp))
+      Text(
+        text = highlighted ?: AnnotatedString(code),
+        modifier = if (softWrap) Modifier.weight(1f) else Modifier,
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        softWrap = softWrap,
+        onTextLayout = { layout ->
+          val updated = layout.visualLineNumbers(code)
+          if (updated != lineNumbers) lineNumbers = updated
+        },
+      )
+    }
+  }
+}
+
+private fun logicalLineNumbers(code: String): String = (1..code.lines().size).joinToString("\n")
+
+private fun TextLayoutResult.visualLineNumbers(code: String): String {
+  var logicalLine = 1
+  var previousLine = 0
+  var newlineIndex = code.indexOf('\n')
+  return buildString {
+    repeat(lineCount) { visualLine ->
+      val lineStart = getLineStart(visualLine)
+      while (newlineIndex >= 0 && newlineIndex < lineStart) {
+        logicalLine++
+        newlineIndex = code.indexOf('\n', newlineIndex + 1)
+      }
+      if (visualLine > 0) append('\n')
+      if (logicalLine != previousLine) {
+        append(logicalLine)
+        previousLine = logicalLine
+      }
+    }
   }
 }
 

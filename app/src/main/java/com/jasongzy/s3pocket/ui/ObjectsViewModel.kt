@@ -16,8 +16,9 @@ import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.SettingsRepository
 import com.jasongzy.s3pocket.data.model.FavoriteItem
 import com.jasongzy.s3pocket.data.model.ObjectItem
-import com.jasongzy.s3pocket.data.storage.DeleteCanceledException
+import com.jasongzy.s3pocket.data.storage.ObjectMove
 import com.jasongzy.s3pocket.data.storage.ObjectStorage
+import com.jasongzy.s3pocket.data.storage.StorageOperationCanceledException
 import com.jasongzy.s3pocket.data.storage.StorageFactory
 import com.jasongzy.s3pocket.data.transfer.TransferManager
 import com.jasongzy.s3pocket.data.transfer.TransferStatus
@@ -53,11 +54,15 @@ data class ObjectsUiState(
   val deletedCount: Int? = null,
   val isDownloadingSource: Boolean = false,
   val downloadedSource: DownloadedSource? = null,
-  val deleteProgress: DeleteProgress? = null,
+  val deleteProgress: ItemProgress? = null,
   val pendingRecursiveDelete: List<ObjectItem>? = null,
   val isDeleting: Boolean = false,
   val isCancelingDelete: Boolean = false,
   val deleteCanceled: Boolean = false,
+  val moveProgress: ItemProgress? = null,
+  val isMoving: Boolean = false,
+  val isCancelingMove: Boolean = false,
+  val moveCanceled: Boolean = false,
   val uploadProgress: UploadProgress? = null,
   val uploadedCount: Int? = null,
   val nextContinuationToken: String? = null,
@@ -65,7 +70,7 @@ data class ObjectsUiState(
   val isScanning: Boolean = false,
 )
 
-data class DeleteProgress(val completed: Int, val total: Int)
+data class ItemProgress(val completed: Int, val total: Int)
 
 data class UploadProgress(
   val completed: Int,
@@ -95,6 +100,7 @@ class ObjectsViewModel(
   private val transferManager: TransferManager,
 ) : ViewModel() {
   @Volatile private var deleteCancelRequested = false
+  @Volatile private var moveCancelRequested = false
   private var scanJob: Job? = null
   private var listingGeneration = 0
   private var scanGeneration = 0
@@ -377,10 +383,45 @@ class ObjectsViewModel(
   }
 
   fun move(items: List<ObjectItem>, destinationPrefix: String) {
-    runOperation("Move", items.size) { storage ->
-      require(items.none { it.isFolder }) { "Only files can be moved" }
-      storage.moveObjects(bucket, items.map { it.key }, destinationPrefix)
+    if (items.isEmpty()) return
+    viewModelScope.launch {
+      moveCancelRequested = false
+      val startedAt = SystemClock.elapsedRealtime()
+      AppLog.debug(TAG) { "Move started (${items.size} selected items)" }
+      _state.update {
+        it.copy(
+          isWorking = true,
+          isMoving = true,
+          isCancelingMove = false,
+          moveCanceled = false,
+          moveProgress = null,
+          error = null,
+          errorRes = null,
+        )
+      }
+      runSuspendCatching {
+          val storage = createStorage()
+          val plan = buildMovePlan(storage, items, destinationPrefix)
+          storage.moveObjects(bucket, plan.moves, { moveCancelRequested }) { completed, total ->
+            _state.update { it.copy(moveProgress = ItemProgress(completed, total)) }
+          }
+          updateMovedFavorites(plan.pathMappings)
+        }
+        .onSuccess {
+          AppLog.debug(TAG) { "Move succeeded in ${SystemClock.elapsedRealtime() - startedAt} ms" }
+          _state.update {
+            it.copy(isWorking = false, isMoving = false, isCancelingMove = false, moveProgress = null)
+          }
+          refresh()
+        }
+        .onFailure { error -> handleMoveFailure(error, startedAt) }
     }
+  }
+
+  fun cancelMove() {
+    if (!_state.value.isMoving) return
+    moveCancelRequested = true
+    _state.update { it.copy(isCancelingMove = true) }
   }
 
   private fun runOperation(
@@ -416,6 +457,48 @@ class ObjectsViewModel(
     return storageFactory.create(profile)
   }
 
+  private suspend fun buildMovePlan(
+    storage: ObjectStorage,
+    items: List<ObjectItem>,
+    destinationPrefix: String,
+  ): MovePlan {
+    val destination = destinationPrefix.trim('/').let { if (it.isEmpty()) "" else "$it/" }
+    val moves = mutableListOf<ObjectMove>()
+    val pathMappings = mutableListOf<MovePathMapping>()
+    items.forEach { item ->
+      if (moveCancelRequested) throw StorageOperationCanceledException()
+      if (item.isFolder) {
+        val sourcePrefix = item.key.trimEnd('/') + "/"
+        val targetPrefix = destination + sourcePrefix.removeSuffix("/").substringAfterLast('/') + "/"
+        require(sourcePrefix != targetPrefix) { "Source and destination are the same" }
+        require(!destination.startsWith(sourcePrefix)) { "Destination is inside source folder" }
+        storage.listObjectKeys(bucket, sourcePrefix) { moveCancelRequested }.forEach { sourceKey ->
+          moves += ObjectMove(sourceKey, targetPrefix + sourceKey.removePrefix(sourcePrefix))
+        }
+        pathMappings += MovePathMapping(sourcePrefix, targetPrefix, isPrefix = true)
+      } else {
+        val targetKey = destination + item.key.substringAfterLast('/')
+        require(item.key != targetKey) { "Source and destination are the same" }
+        moves += ObjectMove(item.key, targetKey)
+        pathMappings += MovePathMapping(item.key, targetKey, isPrefix = false)
+      }
+    }
+    val distinctMoves = moves.distinctBy { it.sourceKey }
+    require(distinctMoves.map { it.targetKey }.distinct().size == distinctMoves.size) { "Duplicate destination object" }
+    return MovePlan(distinctMoves, pathMappings)
+  }
+
+  private suspend fun updateMovedFavorites(pathMappings: List<MovePathMapping>) {
+    val current = profiles.favorites.first()
+    val updated = current.map { favorite ->
+      if (favorite.profileId != profileId || favorite.bucket != bucket) return@map favorite
+      val mapping = pathMappings.filter { it.matches(favorite.key) }.maxByOrNull { it.source.length }
+        ?: return@map favorite
+      favorite.copy(key = mapping.target + favorite.key.removePrefix(mapping.source))
+    }
+    if (updated != current) profiles.replaceFavorites(updated)
+  }
+
   private suspend fun buildDeletePlan(
     storage: ObjectStorage,
     items: List<ObjectItem>,
@@ -437,7 +520,7 @@ class ObjectsViewModel(
     plan: DeletePlan,
   ) {
     storage.deleteObjects(bucket, plan.keys, { deleteCancelRequested }) { completed, total ->
-      _state.update { it.copy(deleteProgress = DeleteProgress(completed, total)) }
+      _state.update { it.copy(deleteProgress = ItemProgress(completed, total)) }
     }
     removeDeletedFavorites(items)
     val deletedCount = maxOf(items.size, plan.keys.size)
@@ -464,7 +547,7 @@ class ObjectsViewModel(
   }
 
   private fun handleDeleteFailure(error: Throwable) {
-    if (error is DeleteCanceledException) {
+    if (error is StorageOperationCanceledException) {
       AppLog.debug(TAG) { "Delete canceled" }
       _state.update {
         it.copy(
@@ -494,11 +577,42 @@ class ObjectsViewModel(
     }
   }
 
+  private fun handleMoveFailure(error: Throwable, startedAt: Long) {
+    if (error is StorageOperationCanceledException) {
+      AppLog.debug(TAG) { "Move canceled" }
+      _state.update {
+        it.copy(
+          isWorking = false,
+          isMoving = false,
+          isCancelingMove = false,
+          moveProgress = null,
+          moveCanceled = true,
+        )
+      }
+      refresh()
+      return
+    }
+    AppLog.error(TAG, error) { "Move failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
+    val errorRes = error.operationErrorRes()
+    _state.update {
+      it.copy(
+        isWorking = false,
+        isMoving = false,
+        isCancelingMove = false,
+        moveProgress = null,
+        error = if (errorRes == null) error.userMessage() else null,
+        errorRes = errorRes,
+      )
+    }
+  }
+
   fun clearError() = _state.update { it.copy(error = null, errorRes = null) }
 
   fun consumeDeletedCount() = _state.update { it.copy(deletedCount = null) }
 
   fun consumeDeleteCanceled() = _state.update { it.copy(deleteCanceled = false) }
+
+  fun consumeMoveCanceled() = _state.update { it.copy(moveCanceled = false) }
 
   fun consumeDownloadedSource() = _state.update { it.copy(downloadedSource = null) }
 
@@ -548,10 +662,23 @@ private fun Throwable.operationErrorRes(): Int? =
   when {
     message == "Invalid folder name" -> com.jasongzy.s3pocket.R.string.error_invalid_folder_name
     message == "Recursive folder deletion is disabled" -> com.jasongzy.s3pocket.R.string.error_recursive_delete_disabled
-    message == "Only files can be moved" -> com.jasongzy.s3pocket.R.string.error_only_files_move
     message == "Source and destination are the same" -> com.jasongzy.s3pocket.R.string.error_same_destination
+    message == "Destination is inside source folder" -> com.jasongzy.s3pocket.R.string.error_destination_inside_source
     message?.startsWith("Object already exists:") == true -> com.jasongzy.s3pocket.R.string.error_destination_exists
     else -> null
   }
 
 private data class DeletePlan(val keys: List<String>, val hasNonEmptyFolder: Boolean)
+
+private data class MovePlan(
+  val moves: List<ObjectMove>,
+  val pathMappings: List<MovePathMapping>,
+)
+
+private data class MovePathMapping(
+  val source: String,
+  val target: String,
+  val isPrefix: Boolean,
+) {
+  fun matches(key: String): Boolean = if (isPrefix) key.startsWith(source) else key == source
+}

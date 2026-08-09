@@ -20,9 +20,9 @@
     <string name="folder_name">目录名称</string>
     <plurals name="delete_items_title"><item quantity="other">删除 %1$d 项？</item></plurals>
     <string name="delete_items_description">所选文件和目录将被永久删除。</string>
-    <plurals name="move_items_title"><item quantity="other">移动 %1$d 个文件？</item></plurals>
+    <plurals name="move_items_title"><item quantity="other">移动 %1$d 个项目？</item></plurals>
     <string name="destination_folder">目标目录</string>
-    <string name="move_items_description">请输入存储桶内的相对目录路径。不会覆盖目标位置已有文件。</string>
+    <string name="move_items_description">请输入存储桶内的相对目录路径，留空表示存储桶根目录。若目录内对象较多，移动可能需要较长时间；不会覆盖目标位置已有对象，取消时已经移动的对象将保留在目标位置。</string>
     <string name="object_exists_title">对象已存在</string>
     <string name="object_exists_description">%1$s 已存在，请选择后续操作。</string>
     <string name="overwrite">覆盖</string>
@@ -42,11 +42,13 @@
     <string name="delete_everything">全部删除</string>
     <string name="preparing_deletion">正在准备删除…</string>
     <string name="delete_progress">正在删除 %1$d / %2$d</string>
-    <string name="cancel_deletion">取消</string>
     <string name="canceling">正在取消…</string>
     <string name="deletion_canceled">删除已取消。已经删除的项目无法恢复。</string>
-    <string name="error_only_files_move">当前版本暂不支持移动目录。</string>
+    <string name="preparing_move">正在准备移动…</string>
+    <string name="move_progress">正在移动 %1$d / %2$d 个对象</string>
+    <string name="move_canceled">移动已取消。已经移动的对象将保留在目标位置。</string>
     <string name="error_same_destination">来源和目标位置相同。</string>
+    <string name="error_destination_inside_source">不能将目录移动到自身内部。</string>
     <string name="error_destination_exists">目标位置已存在同名文件。</string>
     <string name="profiles">存储连接</string>
     <string name="favorites">收藏</string>

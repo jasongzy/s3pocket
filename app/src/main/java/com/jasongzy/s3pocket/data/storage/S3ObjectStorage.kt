@@ -283,7 +283,7 @@ class S3ObjectStorage(
     val keys = mutableListOf<String>()
     var token: String? = null
     do {
-      if (shouldCancel()) throw DeleteCanceledException()
+      if (shouldCancel()) throw StorageOperationCanceledException()
       val response = client.listObjectsV2 {
         this.bucket = bucket
         this.prefix = prefix
@@ -292,7 +292,7 @@ class S3ObjectStorage(
       keys += response.contents.orEmpty().mapNotNull { it.key }
       token = response.nextContinuationToken
     } while (token != null)
-    if (shouldCancel()) throw DeleteCanceledException()
+    if (shouldCancel()) throw StorageOperationCanceledException()
     keys
   }
 
@@ -306,7 +306,7 @@ class S3ObjectStorage(
     onProgress(0, distinctKeys.size)
     var completed = 0
     distinctKeys.chunked(DELETE_BATCH_SIZE).forEach { chunk ->
-      if (shouldCancel()) throw DeleteCanceledException()
+      if (shouldCancel()) throw StorageOperationCanceledException()
       val response = client.deleteObjects {
         this.bucket = bucket
         delete = Delete {
@@ -319,33 +319,42 @@ class S3ObjectStorage(
       }
       completed += chunk.size
       onProgress(completed, distinctKeys.size)
-      if (shouldCancel()) throw DeleteCanceledException()
+      if (shouldCancel()) throw StorageOperationCanceledException()
     }
   }
 
-  override suspend fun moveObjects(bucket: String, keys: List<String>, destinationPrefix: String) =
+  override suspend fun moveObjects(
+    bucket: String,
+    moves: List<ObjectMove>,
+    shouldCancel: () -> Boolean,
+    onProgress: (completed: Int, total: Int) -> Unit,
+  ) =
     withClient(bucket) { client ->
-      val prefix = destinationPrefix.trim('/').let { if (it.isEmpty()) "" else "$it/" }
-      val moves = keys.distinct().map { source -> source to prefix + source.substringAfterLast('/') }
-      require(moves.none { (source, target) -> source == target }) { "Source and destination are the same" }
-      moves.forEach { (_, target) ->
+      val distinctMoves = moves.distinctBy { it.sourceKey }
+      require(distinctMoves.map { it.targetKey }.distinct().size == distinctMoves.size) { "Duplicate destination object" }
+      require(distinctMoves.none { it.sourceKey == it.targetKey }) { "Source and destination are the same" }
+      onProgress(0, distinctMoves.size)
+      distinctMoves.forEach { move ->
+        if (shouldCancel()) throw StorageOperationCanceledException()
         val exists = client.listObjectsV2 {
           this.bucket = bucket
-          this.prefix = target
+          prefix = move.targetKey
           maxKeys = 1
-        }.contents.orEmpty().any { it.key == target }
-        require(!exists) { "Object already exists: $target" }
+        }.contents.orEmpty().any { it.key == move.targetKey }
+        require(!exists) { "Object already exists: ${move.targetKey}" }
       }
-      moves.forEach { (source, target) ->
+      distinctMoves.forEachIndexed { index, move ->
+        if (shouldCancel()) throw StorageOperationCanceledException()
         client.copyObject {
           this.bucket = bucket
-          key = target
-          copySource = "$bucket/${source.encodePath()}"
+          key = move.targetKey
+          copySource = "$bucket/${move.sourceKey.encodePath()}"
         }
         client.deleteObject {
           this.bucket = bucket
-          key = source
+          key = move.sourceKey
         }
+        onProgress(index + 1, distinctMoves.size)
       }
     }
 

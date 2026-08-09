@@ -27,11 +27,11 @@
     </plurals>
     <string name="delete_items_description">Selected files and folders will be deleted permanently.</string>
     <plurals name="move_items_title">
-        <item quantity="one">Move %1$d file?</item>
-        <item quantity="other">Move %1$d files?</item>
+        <item quantity="one">Move %1$d item?</item>
+        <item quantity="other">Move %1$d items?</item>
     </plurals>
     <string name="destination_folder">Destination folder</string>
-    <string name="move_items_description">Enter a bucket-relative folder path. Existing destination files will not be overwritten.</string>
+    <string name="move_items_description">Enter a bucket-relative folder path; leave it empty for the bucket root. Moving folders with many objects can take a while. Existing destination objects will not be overwritten, and completed moves remain at the destination if canceled.</string>
     <string name="object_exists_title">Object already exists</string>
     <string name="object_exists_description">%1$s already exists. Choose how to continue.</string>
     <string name="overwrite">Overwrite</string>
@@ -51,11 +51,13 @@
     <string name="delete_everything">Delete everything</string>
     <string name="preparing_deletion">Preparing deletion…</string>
     <string name="delete_progress">Deleting %1$d of %2$d</string>
-    <string name="cancel_deletion">Cancel</string>
     <string name="canceling">Canceling…</string>
     <string name="deletion_canceled">Deletion canceled. Items already deleted cannot be recovered.</string>
-    <string name="error_only_files_move">Folders cannot be moved in this version.</string>
+    <string name="preparing_move">Preparing move…</string>
+    <string name="move_progress">Moving %1$d of %2$d objects</string>
+    <string name="move_canceled">Move canceled. Objects already moved remain at the destination.</string>
     <string name="error_same_destination">The source and destination are the same.</string>
+    <string name="error_destination_inside_source">A folder cannot be moved into itself.</string>
     <string name="error_destination_exists">A file with the same name already exists at the destination.</string>
     <string name="profiles">Profiles</string>
     <string name="favorites">Favorites</string>

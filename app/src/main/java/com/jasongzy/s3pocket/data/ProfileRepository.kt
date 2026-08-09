@@ -87,6 +87,12 @@ class ProfileRepository(
     }
   }
 
+  suspend fun replaceFavorites(items: List<FavoriteItem>) {
+    context.profileDataStore.edit { preferences ->
+      preferences[FAVORITES] = cipher.encrypt(encodeFavorites(items.distinctBy { it.id }))
+    }
+  }
+
   suspend fun reorderFavorites(favoriteIds: List<String>) {
     context.profileDataStore.edit { preferences ->
       val current = preferences[FAVORITES]?.let(cipher::decrypt)?.let(::decodeFavorites).orEmpty()

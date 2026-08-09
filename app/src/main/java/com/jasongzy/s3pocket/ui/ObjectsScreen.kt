@@ -270,6 +270,13 @@ fun ObjectsScreen(
       viewModel.consumeDeleteCanceled()
     }
   }
+  if (state.moveCanceled) {
+    val message = stringResource(R.string.move_canceled)
+    LaunchedEffect(Unit) {
+      Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+      viewModel.consumeMoveCanceled()
+    }
+  }
   state.downloadedSource?.let { source ->
     LaunchedEffect(source.uri) {
       selected = SelectedDocument(source.uri, source.name, source.contentType, source.size, source.sourceUrl)
@@ -451,7 +458,6 @@ fun ObjectsScreen(
             TooltipIconButton(
               label = stringResource(R.string.move),
               onClick = { movingItems = selectedItems },
-              enabled = selectedItems.none { it.isFolder },
             ) {
               AppIcon(R.drawable.ms_drive_file_move_24, null)
             }
@@ -507,36 +513,21 @@ fun ObjectsScreen(
         }
       }
       if (state.isDeleting) {
-        val progress = state.deleteProgress
-        if (progress == null) {
-          LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        } else {
-          LinearProgressIndicator(
-            progress = { if (progress.total == 0) 1f else progress.completed.toFloat() / progress.total },
-            modifier = Modifier.fillMaxWidth(),
-          )
-        }
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(
-            if (progress == null) stringResource(R.string.preparing_deletion)
-            else stringResource(R.string.delete_progress, progress.completed, progress.total),
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          TextButton(
-            onClick = viewModel::cancelDelete,
-            enabled = !state.isCancelingDelete,
-          ) {
-            Text(
-              if (state.isCancelingDelete) stringResource(R.string.canceling)
-              else stringResource(R.string.cancel_deletion),
-            )
-          }
-        }
+        CancellableOperationProgress(
+          progress = state.deleteProgress,
+          label = state.deleteProgress?.let { stringResource(R.string.delete_progress, it.completed, it.total) }
+            ?: stringResource(R.string.preparing_deletion),
+          isCanceling = state.isCancelingDelete,
+          onCancel = viewModel::cancelDelete,
+        )
+      } else if (state.isMoving) {
+        CancellableOperationProgress(
+          progress = state.moveProgress,
+          label = state.moveProgress?.let { stringResource(R.string.move_progress, it.completed, it.total) }
+            ?: stringResource(R.string.preparing_move),
+          isCanceling = state.isCancelingMove,
+          onCancel = viewModel::cancelMove,
+        )
       } else if (state.isUploading || state.isWorking || state.isDownloadingSource || isScanningFolder) {
         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
       } else if (state.isScanning) {
@@ -764,6 +755,7 @@ fun ObjectsScreen(
       supportingText = stringResource(R.string.move_items_description),
       confirmLabel = stringResource(R.string.move),
       onDismiss = { movingItems = null },
+      allowBlank = true,
       onConfirm = { destination ->
         viewModel.move(items, destination)
         selectedKeys = emptySet()
@@ -853,6 +845,37 @@ fun ObjectsScreen(
         }
       },
     )
+  }
+}
+
+@Composable
+private fun CancellableOperationProgress(
+  progress: ItemProgress?,
+  label: String,
+  isCanceling: Boolean,
+  onCancel: () -> Unit,
+) {
+  if (progress == null) {
+    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+  } else {
+    LinearProgressIndicator(
+      progress = { if (progress.total == 0) 1f else progress.completed.toFloat() / progress.total },
+      modifier = Modifier.fillMaxWidth(),
+    )
+  }
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      label,
+      modifier = Modifier.weight(1f),
+      style = MaterialTheme.typography.labelMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    TextButton(onClick = onCancel, enabled = !isCanceling) {
+      Text(stringResource(if (isCanceling) R.string.canceling else R.string.cancel))
+    }
   }
 }
 
@@ -1151,6 +1174,7 @@ private fun TextInputDialog(
   initialValue: String = "",
   supportingText: String? = null,
   confirmLabel: String? = null,
+  allowBlank: Boolean = false,
 ) {
   var value by remember { mutableStateOf(initialValue) }
   AlertDialog(
@@ -1163,7 +1187,7 @@ private fun TextInputDialog(
       }
     },
     confirmButton = {
-      TextButton(onClick = { onConfirm(value) }, enabled = value.isNotBlank()) {
+      TextButton(onClick = { onConfirm(value) }, enabled = allowBlank || value.isNotBlank()) {
         Text(confirmLabel ?: stringResource(R.string.ok))
       }
     },

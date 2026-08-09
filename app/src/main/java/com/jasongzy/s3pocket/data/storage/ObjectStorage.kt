@@ -55,7 +55,12 @@ interface ObjectStorage {
     onProgress: (completed: Int, total: Int) -> Unit,
   )
 
-  suspend fun moveObjects(bucket: String, keys: List<String>, destinationPrefix: String)
+  suspend fun moveObjects(
+    bucket: String,
+    moves: List<ObjectMove>,
+    shouldCancel: () -> Boolean,
+    onProgress: (completed: Int, total: Int) -> Unit,
+  )
 
   suspend fun updateObject(bucket: String, request: UpdateObject)
 }
@@ -65,6 +70,8 @@ data class ObjectPage(
   val nextToken: String?,
 )
 
-class DeleteCanceledException : Exception()
+data class ObjectMove(val sourceKey: String, val targetKey: String)
+
+class StorageOperationCanceledException : Exception()
 
 class TransferCanceledException : Exception()

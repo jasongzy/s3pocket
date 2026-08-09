@@ -6,15 +6,15 @@
 
 [中文文档](README.zh-CN.md)
 
-S3 Pocket is a native Android client for accessing S3-compatible object storage anywhere. Amazon S3 and Cloudflare R2 are currently supported.
+S3 Pocket is a modern, native Android client for accessing Amazon S3, Cloudflare R2, and other S3-compatible object storage services anywhere.
 
 ## ✨ Features
 
-- Complete file-management experience across buckets, folders, and objects
+- Complete file-management experience across buckets, folders, and objects, including uploads from the Android share sheet
 - First-class object metadata support, including inspection, editing, upload metadata, and reusable templates
 - Image, text, code, and video previews
 - Public URLs and temporary presigned links for access and sharing
-- Multiple connections, with optional Cloudflare R2 usage metrics
+- Multiple Amazon S3 and Cloudflare R2 connections, plus other S3-compatible services and optional R2 usage metrics
 - Encrypted local credentials and configuration backup and restore
 
 ## 📥 Download

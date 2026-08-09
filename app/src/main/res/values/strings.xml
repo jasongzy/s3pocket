@@ -149,6 +149,14 @@
     <string name="test_connection">Test connection</string>
     <string name="testing_connection">Testing…</string>
     <string name="connection_test_succeeded">Connection successful</string>
+    <plurals name="upload_files">
+        <item quantity="one">Upload %1$d file</item>
+        <item quantity="other">Upload %1$d files</item>
+    </plurals>
+    <string name="uploading_files">Uploading files</string>
+    <string name="upload_progress">%1$d of %2$d uploaded</string>
+    <string name="objects_exist_title">Some objects already exist</string>
+    <string name="objects_exist_description">Choose whether to overwrite matching objects or automatically rename the shared files.</string>
     <string name="object_load_error">Couldn’t load object</string>
     <string name="text_preview">Text preview</string>
     <string name="video_preview">Video preview</string>

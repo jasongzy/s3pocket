@@ -83,6 +83,11 @@ private data class PendingUpload(
   val metadata: Map<String, String>,
 )
 
+private data class PendingBatchUpload(
+  val documents: List<SelectedDocument>,
+  val metadata: Map<String, String>,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ObjectsScreen(
@@ -96,6 +101,8 @@ fun ObjectsScreen(
   onOpenFolder: (String) -> Unit,
   onOpenObject: (String) -> Unit,
   onNavigateToPrefix: (String) -> Unit,
+  sharedUris: List<Uri>,
+  onSharedUrisConsumed: () -> Unit,
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
@@ -115,12 +122,14 @@ fun ObjectsScreen(
   val favorites by viewModel.favorites.collectAsStateWithLifecycle()
   val metadataTemplate by settingsRepository.metadataTemplate.collectAsStateWithLifecycle(emptyMap())
   var selected by remember { mutableStateOf<SelectedDocument?>(null) }
+  var sharedDocuments by remember { mutableStateOf<List<SelectedDocument>?>(null) }
   var selectionError by remember { mutableStateOf<String?>(null) }
   var selectedKeys by remember(prefix) { mutableStateOf(emptySet<String>()) }
   var createFolder by remember { mutableStateOf(false) }
   var deletingItems by remember { mutableStateOf<List<ObjectItem>?>(null) }
   var movingItems by remember { mutableStateOf<List<ObjectItem>?>(null) }
   var pendingUpload by remember { mutableStateOf<PendingUpload?>(null) }
+  var pendingBatchUpload by remember { mutableStateOf<PendingBatchUpload?>(null) }
   val sort by settingsRepository.objectSort.collectAsStateWithLifecycle(ObjectSortMode.NAME)
   val ascending by settingsRepository.objectSortAscending.collectAsStateWithLifecycle(true)
   var showMore by remember { mutableStateOf(false) }
@@ -157,6 +166,18 @@ fun ObjectsScreen(
       runCatching { context.contentResolver.document(uri, unknownFileSize) }
         .onSuccess { selected = it }
         .onFailure { selectionError = it.userMessage() }
+    }
+  }
+  LaunchedEffect(sharedUris) {
+    if (sharedUris.isNotEmpty()) {
+      val documents = sharedUris.mapNotNull { uri ->
+        runCatching { context.contentResolver.document(uri, unknownFileSize) }
+          .onFailure { selectionError = it.userMessage() }
+          .getOrNull()
+      }
+      if (documents.size == 1) selected = documents.first()
+      else if (documents.isNotEmpty()) sharedDocuments = documents
+      onSharedUrisConsumed()
     }
   }
   state.deletedCount?.let { count ->
@@ -444,6 +465,24 @@ fun ObjectsScreen(
       },
     )
   }
+  sharedDocuments?.let { documents ->
+    BatchUploadDialog(
+      documents = documents,
+      isUploading = state.isUploading,
+      initialMetadata = metadataTemplate.filterKeys { !it.equals("source-url", true) },
+      onDismiss = { if (!state.isUploading) sharedDocuments = null },
+      onUpload = { metadata ->
+        val keys = documents.map { prefix + it.name }
+        val hasConflicts = keys.distinct().size != keys.size || keys.any { key -> state.objects.any { !it.isFolder && it.key == key } }
+        if (hasConflicts) {
+          pendingBatchUpload = PendingBatchUpload(documents, metadata)
+        } else {
+          viewModel.uploadBatch(documents.toBatchUploadItems(prefix, metadata, emptySet(), autoRename = false))
+        }
+        sharedDocuments = null
+      },
+    )
+  }
   if (showUrlUpload) {
     TextInputDialog(
       title = stringResource(R.string.upload_from_url),
@@ -556,6 +595,49 @@ fun ObjectsScreen(
       dismissButton = { TextButton(onClick = { pendingUpload = null }) { Text(stringResource(R.string.cancel)) } },
     )
   }
+  pendingBatchUpload?.let { upload ->
+    AlertDialog(
+      onDismissRequest = { pendingBatchUpload = null },
+      title = { Text(stringResource(R.string.objects_exist_title)) },
+      text = { Text(stringResource(R.string.objects_exist_description)) },
+      confirmButton = {
+        Row {
+          TextButton(onClick = {
+            viewModel.uploadBatch(
+              upload.documents.toBatchUploadItems(
+                prefix,
+                upload.metadata,
+                state.objects.mapTo(mutableSetOf()) { it.key },
+                autoRename = true,
+              )
+            )
+            pendingBatchUpload = null
+          }) { Text(stringResource(R.string.auto_rename)) }
+          TextButton(onClick = {
+            viewModel.uploadBatch(upload.documents.toBatchUploadItems(prefix, upload.metadata, emptySet(), autoRename = false))
+            pendingBatchUpload = null
+          }) { Text(stringResource(R.string.overwrite)) }
+        }
+      },
+      dismissButton = { TextButton(onClick = { pendingBatchUpload = null }) { Text(stringResource(R.string.cancel)) } },
+    )
+  }
+  state.uploadProgress?.let { progress ->
+    AlertDialog(
+      onDismissRequest = {},
+      title = { Text(stringResource(R.string.uploading_files)) },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          LinearProgressIndicator(
+            progress = { progress.completed.toFloat() / progress.total },
+            modifier = Modifier.fillMaxWidth(),
+          )
+          Text(stringResource(R.string.upload_progress, progress.completed, progress.total))
+        }
+      },
+      confirmButton = {},
+    )
+  }
 }
 
 private fun ObjectItem.favorite(profileId: String, bucket: String): FavoriteItem =
@@ -565,6 +647,21 @@ private fun ObjectItem.favorite(profileId: String, bucket: String): FavoriteItem
     key = key,
     kind = if (isFolder) FavoriteKind.FOLDER else FavoriteKind.FILE,
   )
+
+private fun List<SelectedDocument>.toBatchUploadItems(
+  prefix: String,
+  metadata: Map<String, String>,
+  occupiedKeys: Set<String>,
+  autoRename: Boolean,
+): List<BatchUploadItem> {
+  val usedKeys = occupiedKeys.toMutableSet()
+  return map { document ->
+    val originalKey = prefix + document.name
+    val key = if (autoRename) nextAvailableKey(originalKey, usedKeys) else originalKey
+    usedKeys += key
+    BatchUploadItem(document.uri, key, document.contentType, document.size, metadata)
+  }
+}
 
 private fun pathEntries(bucket: String, prefix: String): List<Pair<String, String>> {
   val entries = mutableListOf(bucket to "")
@@ -664,6 +761,68 @@ private fun UploadDialog(
             key.isBlank() || key.endsWith('/') -> errorRes = R.string.error_object_key
             pairs.map { it.key.lowercase() }.distinct().size != pairs.size -> errorRes = R.string.error_metadata_duplicate
             else -> onUpload(key.trimStart('/'), contentType, pairs.associate { it.key.trim() to it.value })
+          }
+        },
+        enabled = !isUploading,
+      ) { Text(stringResource(R.string.upload)) }
+    },
+    dismissButton = { TextButton(onClick = onDismiss, enabled = !isUploading) { Text(stringResource(R.string.cancel)) } },
+  )
+}
+
+@Composable
+private fun BatchUploadDialog(
+  documents: List<SelectedDocument>,
+  isUploading: Boolean,
+  initialMetadata: Map<String, String>,
+  onDismiss: () -> Unit,
+  onUpload: (Map<String, String>) -> Unit,
+) {
+  var errorRes by remember { mutableStateOf<Int?>(null) }
+  val metadata = remember(documents) {
+    mutableStateListOf<MetadataEntry>().apply {
+      addAll(initialMetadata.map { MetadataEntry(it.key, it.value) })
+    }
+  }
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text(pluralStringResource(R.plurals.upload_files, documents.size, documents.size)) },
+    text = {
+      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        items(documents) { document -> Text(document.name) }
+        item { Text(stringResource(R.string.custom_metadata), style = MaterialTheme.typography.titleSmall) }
+        items(metadata.size) { index ->
+          val entry = metadata[index]
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+              value = entry.key,
+              onValueChange = { metadata[index] = entry.copy(key = it) },
+              label = { Text(stringResource(R.string.metadata_key)) },
+              modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+              value = entry.value,
+              onValueChange = { metadata[index] = entry.copy(value = it) },
+              label = { Text(stringResource(R.string.metadata_value)) },
+              modifier = Modifier.weight(1f),
+            )
+            TooltipIconButton(stringResource(R.string.remove_metadata), { metadata.removeAt(index) }) {
+              AppIcon(R.drawable.ms_delete_24, null)
+            }
+          }
+        }
+        item { TextButton(onClick = { metadata += MetadataEntry() }) { Text(stringResource(R.string.add_metadata)) } }
+        errorRes?.let { item { Text(stringResource(it), color = MaterialTheme.colorScheme.error) } }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = {
+          val pairs = metadata.filter { it.key.isNotBlank() }
+          if (pairs.map { it.key.lowercase() }.distinct().size != pairs.size) {
+            errorRes = R.string.error_metadata_duplicate
+          } else {
+            onUpload(pairs.associate { it.key.trim() to it.value })
           }
         },
         enabled = !isUploading,

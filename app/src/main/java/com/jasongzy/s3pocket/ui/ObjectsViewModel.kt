@@ -52,9 +52,20 @@ data class ObjectsUiState(
   val isDeleting: Boolean = false,
   val isCancelingDelete: Boolean = false,
   val deleteCanceled: Boolean = false,
+  val uploadProgress: UploadProgress? = null,
 )
 
 data class DeleteProgress(val completed: Int, val total: Int)
+
+data class UploadProgress(val completed: Int, val total: Int)
+
+data class BatchUploadItem(
+  val uri: Uri,
+  val key: String,
+  val contentType: String,
+  val contentLength: Long,
+  val metadata: Map<String, String>,
+)
 
 class ObjectsViewModel(
   private val profileId: String,
@@ -126,6 +137,51 @@ class ObjectsViewModel(
         .onFailure { error ->
           AppLog.error(TAG, error) { "Upload failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
           _state.update { it.copy(isUploading = false, error = error.userMessage()) }
+        }
+    }
+  }
+
+  fun uploadBatch(items: List<BatchUploadItem>) {
+    if (items.isEmpty()) return
+    viewModelScope.launch {
+      val startedAt = SystemClock.elapsedRealtime()
+      AppLog.debug(TAG) { "Batch upload started (${items.size} files)" }
+      _state.update {
+        it.copy(
+          isUploading = true,
+          uploadProgress = UploadProgress(0, items.size),
+          error = null,
+          errorRes = null,
+        )
+      }
+      runSuspendCatching {
+          val profile = profiles.get(profileId)
+          val storage = storageFactory.create(profile)
+          items.forEachIndexed { index, item ->
+            withContext(Dispatchers.IO) {
+              storage.upload(
+                bucket = bucket,
+                request =
+                  UploadObject(
+                    key = item.key,
+                    contentType = item.contentType.ifBlank { "application/octet-stream" },
+                    contentLength = item.contentLength,
+                    metadata = item.metadata,
+                  ),
+                source = UploadSource { contentResolver.openInputStream(item.uri) ?: error("Unable to open shared file") },
+              )
+            }
+            _state.update { it.copy(uploadProgress = UploadProgress(index + 1, items.size)) }
+          }
+        }
+        .onSuccess {
+          AppLog.debug(TAG) { "Batch upload succeeded in ${SystemClock.elapsedRealtime() - startedAt} ms" }
+          _state.update { it.copy(isUploading = false, uploadProgress = null) }
+          refresh()
+        }
+        .onFailure { error ->
+          AppLog.error(TAG, error) { "Batch upload failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
+          _state.update { it.copy(isUploading = false, uploadProgress = null, error = error.userMessage()) }
         }
     }
   }

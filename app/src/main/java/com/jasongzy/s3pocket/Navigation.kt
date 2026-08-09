@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
+import android.net.Uri
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
@@ -24,7 +25,11 @@ import com.jasongzy.s3pocket.ui.LocalSharedTransitionScope
 import com.jasongzy.s3pocket.data.model.FavoriteKind
 
 @Composable
-fun MainNavigation(predictiveBackEnabled: Boolean) {
+fun MainNavigation(
+  predictiveBackEnabled: Boolean,
+  sharedUris: List<Uri>,
+  onSharedUrisConsumed: () -> Unit,
+) {
   val backStack = rememberNavBackStack(ProfilesRoute)
   val application = LocalContext.current.applicationContext as S3PocketApplication
   val container = application.container
@@ -124,6 +129,8 @@ fun MainNavigation(predictiveBackEnabled: Boolean) {
                 backStack.add(ObjectsRoute(route.profileId, route.bucket, targetPrefix))
               }
             },
+            sharedUris = sharedUris,
+            onSharedUrisConsumed = onSharedUrisConsumed,
           )
         }
         entry<ObjectDetailsRoute> { route ->

@@ -1,15 +1,21 @@
 package com.jasongzy.s3pocket.ui
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.content.ContextWrapper
-import android.app.Activity
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.text.format.DateUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,14 +23,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,43 +35,45 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.produceState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
-import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.SettingsRepository
+import com.jasongzy.s3pocket.data.model.FavoriteKind
+import com.jasongzy.s3pocket.data.model.FavoriteItem
 import com.jasongzy.s3pocket.data.model.ObjectDetails
 import com.jasongzy.s3pocket.data.storage.StorageFactory
-import com.jasongzy.s3pocket.data.model.FavoriteItem
-import com.jasongzy.s3pocket.data.model.FavoriteKind
-import androidx.media3.common.MediaItem
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
+import com.jasongzy.s3pocket.data.transfer.TransferManager
 import dev.hossain.highlight.ui.rememberHighlightedCode
 import java.time.Duration
 import java.time.Instant
@@ -86,12 +88,15 @@ fun ObjectDetailsScreen(
   repository: ProfileRepository,
   settingsRepository: SettingsRepository,
   storageFactory: StorageFactory,
+  transferManager: TransferManager,
   onBack: () -> Unit,
   onRenamed: (String) -> Unit,
 ) {
   val context = LocalContext.current
   val viewModel: ObjectDetailsViewModel = viewModel {
-    ObjectDetailsViewModel(profileId, bucket, key, repository, settingsRepository, storageFactory, context.contentResolver)
+    ObjectDetailsViewModel(
+      profileId, bucket, key, repository, settingsRepository, storageFactory, transferManager,
+    )
   }
   val state by viewModel.state.collectAsStateWithLifecycle()
   val favorites by viewModel.favorites.collectAsStateWithLifecycle()
@@ -147,6 +152,8 @@ fun ObjectDetailsScreen(
           videoPreviewUrl = state.videoPreviewUrl,
           isDownloading = state.isDownloading,
           downloadComplete = state.downloadComplete,
+          downloadProgress = state.downloadProgress,
+          downloadError = state.downloadError,
           accessUrl = state.accessUrl,
           isTemporaryUrl = state.isTemporaryUrl,
           previewEnabled = state.previewEnabled,
@@ -154,6 +161,8 @@ fun ObjectDetailsScreen(
           isRefreshingUrl = state.isRefreshingUrl,
           onRefreshUrl = { viewModel.refreshAccessUrl { context.showSignedUrlRefreshedToast() } },
           onDownload = { download.launch(fileName) },
+          onCancelDownload = viewModel::cancelDownload,
+          onRetryDownload = viewModel::retryDownload,
           onEdit = { editing = true },
           modifier = Modifier.padding(padding),
         )
@@ -179,6 +188,8 @@ private fun DetailsContent(
   videoPreviewUrl: String?,
   isDownloading: Boolean,
   downloadComplete: Boolean,
+  downloadProgress: Float?,
+  downloadError: String?,
   accessUrl: String?,
   isTemporaryUrl: Boolean,
   previewEnabled: Boolean,
@@ -186,6 +197,8 @@ private fun DetailsContent(
   isRefreshingUrl: Boolean,
   onRefreshUrl: () -> Unit,
   onDownload: () -> Unit,
+  onCancelDownload: () -> Unit,
+  onRetryDownload: () -> Unit,
   onEdit: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -226,13 +239,27 @@ private fun DetailsContent(
     } else if (previewEnabled && details.isText() && details.size > TEXT_PREVIEW_MAX_BYTES) {
       Text(stringResource(R.string.text_preview_limit), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    if (isDownloading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    if (isDownloading) {
+      LinearProgressIndicator(
+        progress = { downloadProgress ?: 0f },
+        modifier = Modifier.fillMaxWidth(),
+      )
+      TextButton(onClick = onCancelDownload, modifier = Modifier.align(Alignment.End)) {
+        Text(stringResource(R.string.cancel))
+      }
+    }
     Button(onClick = onDownload, enabled = !isDownloading, modifier = Modifier.fillMaxWidth()) {
       AppIcon(R.drawable.ms_download_24, null, Modifier.size(18.dp))
       Spacer(Modifier.size(8.dp))
       Text(stringResource(if (isDownloading) R.string.downloading else R.string.download))
     }
     if (downloadComplete) Text(stringResource(R.string.saved_successfully), color = MaterialTheme.colorScheme.primary)
+    if (downloadError != null) {
+      SelectionContainer { Text(downloadError, color = MaterialTheme.colorScheme.error) }
+      TextButton(onClick = onRetryDownload, modifier = Modifier.align(Alignment.End)) {
+        Text(stringResource(R.string.retry))
+      }
+    }
 
     Button(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
       AppIcon(R.drawable.ms_edit_24, null, Modifier.size(18.dp))

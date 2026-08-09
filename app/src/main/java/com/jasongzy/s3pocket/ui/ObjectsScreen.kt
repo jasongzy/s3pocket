@@ -1,17 +1,17 @@
 package com.jasongzy.s3pocket.ui
 
-import android.content.ContentResolver
 import android.content.ClipboardManager
+import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
@@ -20,10 +20,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,26 +49,37 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil3.compose.AsyncImage
 import com.jasongzy.s3pocket.R
-import com.jasongzy.s3pocket.data.ProfileRepository
-import com.jasongzy.s3pocket.data.SettingsRepository
 import com.jasongzy.s3pocket.data.ObjectSortMode
-import com.jasongzy.s3pocket.data.model.ObjectItem
-import com.jasongzy.s3pocket.data.model.FavoriteItem
+import com.jasongzy.s3pocket.data.ObjectViewMode
+import com.jasongzy.s3pocket.data.ProfileRepository
+import com.jasongzy.s3pocket.data.SafTreeScanner
+import com.jasongzy.s3pocket.data.SettingsRepository
 import com.jasongzy.s3pocket.data.model.FavoriteKind
+import com.jasongzy.s3pocket.data.model.FavoriteItem
+import com.jasongzy.s3pocket.data.model.ObjectItem
 import com.jasongzy.s3pocket.data.storage.StorageFactory
+import com.jasongzy.s3pocket.data.storage.ThumbnailUrlRepository
+import com.jasongzy.s3pocket.data.transfer.TransferManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class SelectedDocument(
   val uri: Uri,
@@ -97,15 +112,19 @@ fun ObjectsScreen(
   repository: ProfileRepository,
   storageFactory: StorageFactory,
   settingsRepository: SettingsRepository,
+  transferManager: TransferManager,
+  thumbnailUrls: ThumbnailUrlRepository,
   onBack: () -> Unit,
   onOpenFolder: (String) -> Unit,
   onOpenObject: (String) -> Unit,
   onNavigateToPrefix: (String) -> Unit,
   sharedUris: List<Uri>,
+  openSharedImmediately: Boolean,
   onSharedUrisConsumed: () -> Unit,
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
+  val scope = rememberCoroutineScope()
   val viewModel: ObjectsViewModel = viewModel {
     ObjectsViewModel(
       profileId,
@@ -116,6 +135,7 @@ fun ObjectsScreen(
       storageFactory,
       context.contentResolver,
       context.cacheDir,
+      transferManager,
     )
   }
   val state by viewModel.state.collectAsStateWithLifecycle()
@@ -124,6 +144,7 @@ fun ObjectsScreen(
   var selected by remember { mutableStateOf<SelectedDocument?>(null) }
   var sharedDocuments by remember { mutableStateOf<List<SelectedDocument>?>(null) }
   var selectionError by remember { mutableStateOf<String?>(null) }
+  var isScanningFolder by remember { mutableStateOf(false) }
   var selectedKeys by remember(prefix) { mutableStateOf(emptySet<String>()) }
   var createFolder by remember { mutableStateOf(false) }
   var deletingItems by remember { mutableStateOf<List<ObjectItem>?>(null) }
@@ -132,6 +153,7 @@ fun ObjectsScreen(
   var pendingBatchUpload by remember { mutableStateOf<PendingBatchUpload?>(null) }
   val sort by settingsRepository.objectSort.collectAsStateWithLifecycle(ObjectSortMode.NAME)
   val ascending by settingsRepository.objectSortAscending.collectAsStateWithLifecycle(true)
+  val viewMode by settingsRepository.objectViewMode.collectAsStateWithLifecycle(ObjectViewMode.LIST)
   var showMore by remember { mutableStateOf(false) }
   var showUploadSources by remember { mutableStateOf(false) }
   var showUrlUpload by remember { mutableStateOf(false) }
@@ -146,6 +168,11 @@ fun ObjectsScreen(
     }
     state.objects.filter { it.name.contains(query.trim(), ignoreCase = true) }.sortedWith(
       compareByDescending<ObjectItem> { it.isFolder }.then(if (ascending) comparator else comparator.reversed())
+    )
+  }
+  LaunchedEffect(query, sort, ascending, state.nextContinuationToken) {
+    viewModel.setCompleteListingRequired(
+      query.isNotBlank() || sort != ObjectSortMode.NAME || !ascending,
     )
   }
   val unknownFileSize = stringResource(R.string.unknown_file_size)
@@ -168,17 +195,37 @@ fun ObjectsScreen(
         .onFailure { selectionError = it.userMessage() }
     }
   }
-  LaunchedEffect(sharedUris) {
-    if (sharedUris.isNotEmpty()) {
-      val documents = sharedUris.mapNotNull { uri ->
-        runCatching { context.contentResolver.document(uri, unknownFileSize) }
-          .onFailure { selectionError = it.userMessage() }
-          .getOrNull()
+  val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+    if (uri != null) {
+      runCatching {
+        context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
       }
+      scope.launch {
+        isScanningFolder = true
+        runSuspendCatching { SafTreeScanner(context.contentResolver, context.cacheDir).scan(uri) }
+          .onSuccess { files ->
+            sharedDocuments = files.map { SelectedDocument(it.uri, it.relativePath, it.contentType, it.size) }
+          }
+          .onFailure { selectionError = it.userMessage() }
+        isScanningFolder = false
+      }
+    }
+  }
+  fun openSharedFiles() {
+    if (sharedUris.isEmpty()) return
+    scope.launch {
+      val results = withContext(Dispatchers.IO) {
+        sharedUris.map { uri -> runCatching { context.contentResolver.document(uri, unknownFileSize) } }
+      }
+      results.firstOrNull { it.isFailure }?.exceptionOrNull()?.let { selectionError = it.userMessage() }
+      val documents = results.mapNotNull(Result<SelectedDocument>::getOrNull)
       if (documents.size == 1) selected = documents.first()
       else if (documents.isNotEmpty()) sharedDocuments = documents
       onSharedUrisConsumed()
     }
+  }
+  LaunchedEffect(sharedUris, openSharedImmediately) {
+    if (sharedUris.isNotEmpty() && openSharedImmediately) openSharedFiles()
   }
   state.deletedCount?.let { count ->
     val message = pluralStringResource(R.plurals.deleted_count, count, count)
@@ -186,6 +233,13 @@ fun ObjectsScreen(
       selectedKeys = emptySet()
       Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
       viewModel.consumeDeletedCount()
+    }
+  }
+  state.uploadedCount?.let { count ->
+    val message = pluralStringResource(R.plurals.uploaded_count, count, count)
+    LaunchedEffect(count) {
+      Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+      viewModel.consumeUploadedCount()
     }
   }
   if (state.deleteCanceled) {
@@ -277,6 +331,16 @@ fun ObjectsScreen(
               TooltipIconButton(stringResource(R.string.search_files), { searchActive = true }) {
                 AppIcon(R.drawable.ms_search_24, null)
               }
+              TooltipIconButton(
+                stringResource(if (viewMode == ObjectViewMode.LIST) R.string.gallery_view else R.string.list_view),
+                {
+                  viewModel.setViewMode(
+                    if (viewMode == ObjectViewMode.LIST) ObjectViewMode.GALLERY else ObjectViewMode.LIST,
+                  )
+                },
+              ) {
+                AppIcon(if (viewMode == ObjectViewMode.LIST) R.drawable.ms_grid_view_24 else R.drawable.ms_view_list_24, null)
+              }
               Box {
               TooltipIconButton(stringResource(R.string.more_actions), { showMore = true }) {
                 AppIcon(R.drawable.ms_more_vert_24, null)
@@ -295,18 +359,18 @@ fun ObjectsScreen(
                       ObjectSortMode.SIZE -> R.string.sort_size
                     })) },
                     leadingIcon = { RadioButton(selected = sort == option, onClick = null) },
-                    onClick = { showMore = false; viewModel.setSort(settingsRepository, option, ascending) },
+                    onClick = { showMore = false; viewModel.setSort(option, ascending) },
                   )
                 }
                 DropdownMenuItem(
                   text = { Text(stringResource(R.string.sort_ascending)) },
                   leadingIcon = { RadioButton(selected = ascending, onClick = null) },
-                  onClick = { showMore = false; viewModel.setSort(settingsRepository, sort, true) },
+                  onClick = { showMore = false; viewModel.setSort(sort, true) },
                 )
                 DropdownMenuItem(
                   text = { Text(stringResource(R.string.sort_descending)) },
                   leadingIcon = { RadioButton(selected = !ascending, onClick = null) },
-                  onClick = { showMore = false; viewModel.setSort(settingsRepository, sort, false) },
+                  onClick = { showMore = false; viewModel.setSort(sort, false) },
                 )
               }
               }
@@ -356,6 +420,10 @@ fun ObjectsScreen(
             onClick = { showUploadSources = false; picker.launch(arrayOf("*/*")) },
           )
           DropdownMenuItem(
+            text = { Text(stringResource(R.string.upload_folder)) },
+            onClick = { showUploadSources = false; folderPicker.launch(null) },
+          )
+          DropdownMenuItem(
             text = { Text(stringResource(R.string.upload_from_url)) },
             onClick = { showUploadSources = false; showUrlUpload = true },
           )
@@ -364,6 +432,25 @@ fun ObjectsScreen(
     },
   ) { padding ->
     Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+      if (sharedUris.isNotEmpty() && !openSharedImmediately) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            pluralStringResource(R.plurals.shared_files_waiting, sharedUris.size, sharedUris.size),
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+          )
+          TextButton(onClick = ::openSharedFiles) { Text(stringResource(R.string.upload_here)) }
+          TooltipIconButton(stringResource(R.string.cancel), onSharedUrisConsumed) {
+            AppIcon(R.drawable.ms_close_24, null)
+          }
+        }
+      }
       if (state.isDeleting) {
         val progress = state.deleteProgress
         if (progress == null) {
@@ -395,8 +482,16 @@ fun ObjectsScreen(
             )
           }
         }
-      } else if (state.isUploading || state.isWorking || state.isDownloadingSource) {
+      } else if (state.isUploading || state.isWorking || state.isDownloadingSource || isScanningFolder) {
         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+      } else if (state.isScanning) {
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        Text(
+          stringResource(R.string.searching_items, state.objects.size),
+          modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
       }
       when {
         state.isLoading -> LoadingPane(PaddingValues())
@@ -414,12 +509,42 @@ fun ObjectsScreen(
             stringResource(R.string.empty_folder_description),
             PaddingValues(),
           )
+        displayedObjects.isEmpty() && state.isScanning -> LoadingPane(PaddingValues())
         displayedObjects.isEmpty() ->
           MessagePane(
             stringResource(R.string.no_search_results),
             query,
             PaddingValues(),
           )
+        viewMode == ObjectViewMode.GALLERY -> LazyVerticalGrid(
+          columns = GridCells.Adaptive(150.dp),
+          contentPadding = PaddingValues(8.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          gridItems(displayedObjects, key = { it.key }) { item ->
+            GalleryObject(
+              item = item,
+              selected = item.key in selectedKeys,
+              thumbnailUrl = { thumbnailUrls.get(profileId, bucket, item.key) },
+              onClick = {
+                if (selectedKeys.isNotEmpty()) selectedKeys = selectedKeys.toggle(item.key)
+                else if (item.isFolder) onOpenFolder(item.key) else onOpenObject(item.key)
+              },
+              onLongClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                selectedKeys = selectedKeys.toggle(item.key)
+              },
+            )
+          }
+          if (state.nextContinuationToken != null && !state.isScanning) {
+            item(key = "load-more-${state.nextContinuationToken}") {
+              LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
+              LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+          }
+          item { Spacer(Modifier.size(88.dp)) }
+        }
         else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
           items(displayedObjects, key = { it.key }) { item ->
             ObjectRow(
@@ -439,6 +564,12 @@ fun ObjectsScreen(
                 selectedKeys = selectedKeys.toggle(item.key)
               },
             )
+          }
+          if (state.nextContinuationToken != null && !state.isScanning) {
+            item(key = "load-more-${state.nextContinuationToken}") {
+              LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
+              LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+            }
           }
           item { Spacer(Modifier.size(88.dp)) }
         }
@@ -629,13 +760,32 @@ fun ObjectsScreen(
       text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
           LinearProgressIndicator(
-            progress = { progress.completed.toFloat() / progress.total },
+            progress = {
+              if (progress.totalBytes > 0) progress.completedBytes.toFloat() / progress.totalBytes
+              else progress.completed.toFloat() / progress.total
+            },
             modifier = Modifier.fillMaxWidth(),
           )
           Text(stringResource(R.string.upload_progress, progress.completed, progress.total))
+          if (progress.totalBytes > 0) {
+            Text(
+              stringResource(R.string.transfer_bytes, formatBytes(progress.completedBytes), formatBytes(progress.totalBytes)),
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          progress.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
       },
-      confirmButton = {},
+      confirmButton = {
+        if (progress.error != null) {
+          TextButton(onClick = viewModel::retryUploads) { Text(stringResource(R.string.retry)) }
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = viewModel::cancelUploads) {
+          Text(if (progress.error != null) stringResource(R.string.dismiss) else stringResource(R.string.cancel))
+        }
+      },
     )
   }
 }
@@ -647,6 +797,46 @@ private fun ObjectItem.favorite(profileId: String, bucket: String): FavoriteItem
     key = key,
     kind = if (isFolder) FavoriteKind.FOLDER else FavoriteKind.FILE,
   )
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun GalleryObject(
+  item: ObjectItem,
+  selected: Boolean,
+  thumbnailUrl: suspend () -> String,
+  onClick: () -> Unit,
+  onLongClick: () -> Unit,
+) {
+  val previewUrl by produceState<String?>(null, item.key) {
+    if (item.isPreviewImage()) value = runSuspendCatching { thumbnailUrl() }.getOrNull()
+  }
+  Column(
+    modifier = Modifier
+      .background(
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        MaterialTheme.shapes.medium,
+      )
+      .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+      .padding(8.dp),
+  ) {
+    Box(Modifier.fillMaxWidth().height(112.dp), contentAlignment = Alignment.Center) {
+      if (previewUrl != null) {
+        AsyncImage(
+          model = previewUrl,
+          contentDescription = null,
+          modifier = Modifier.fillMaxSize(),
+          contentScale = ContentScale.Crop,
+        )
+      } else {
+        AppIcon(item.iconResource(), null, Modifier.size(42.dp), MaterialTheme.colorScheme.primary)
+      }
+    }
+    Text(item.name, maxLines = 2, modifier = Modifier.padding(top = 8.dp))
+    if (!item.isFolder) {
+      Text(formatBytes(item.size), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+  }
+}
 
 private fun List<SelectedDocument>.toBatchUploadItems(
   prefix: String,
@@ -893,6 +1083,9 @@ private fun ObjectItem.iconResource(): Int {
     else -> R.drawable.ms_draft_24
   }
 }
+
+private fun ObjectItem.isPreviewImage(): Boolean = !isFolder &&
+  name.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "avif")
 
 private fun ContentResolver.document(uri: Uri, unknownSizeError: String): SelectedDocument {
   var name: String? = null

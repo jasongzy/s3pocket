@@ -64,6 +64,7 @@ import com.jasongzy.s3pocket.R
 @Composable
 fun ProfilesScreen(
   repository: ProfileRepository,
+  pendingSharedCount: Int,
   onAdd: () -> Unit,
   onEdit: (String) -> Unit,
   onInfo: (String) -> Unit,
@@ -138,6 +139,30 @@ fun ProfilesScreen(
         contentPadding = padding,
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
+        if (pendingSharedCount > 0) {
+          item {
+            Card(
+              colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+              modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+              ) {
+                AppIcon(R.drawable.ms_upload_file_24, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                Text(
+                  androidx.compose.ui.res.pluralStringResource(
+                    R.plurals.choose_shared_destination,
+                    pendingSharedCount,
+                    pendingSharedCount,
+                  ),
+                  color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+              }
+            }
+          }
+        }
         item { Text(stringResource(R.string.profiles), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) }
         itemsIndexed(orderedProfiles, key = { _, profile -> profile.id }) { index, profile ->
           val activeDrag = dragState

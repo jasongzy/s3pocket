@@ -3,19 +3,27 @@ package com.jasongzy.s3pocket.data.storage
 import aws.sdk.kotlin.runtime.auth.credentials.StaticCredentialsProvider
 import aws.sdk.kotlin.services.s3.S3Client
 import aws.sdk.kotlin.services.s3.copyObject
+import aws.sdk.kotlin.services.s3.abortMultipartUpload
+import aws.sdk.kotlin.services.s3.completeMultipartUpload
+import aws.sdk.kotlin.services.s3.createMultipartUpload
 import aws.sdk.kotlin.services.s3.deleteObject
 import aws.sdk.kotlin.services.s3.deleteObjects
 import aws.sdk.kotlin.services.s3.headObject
 import aws.sdk.kotlin.services.s3.listObjectsV2
 import aws.sdk.kotlin.services.s3.model.Delete
+import aws.sdk.kotlin.services.s3.model.CompletedMultipartUpload
+import aws.sdk.kotlin.services.s3.model.CompletedPart
 import aws.sdk.kotlin.services.s3.model.GetObjectRequest
 import aws.sdk.kotlin.services.s3.model.MetadataDirective
 import aws.sdk.kotlin.services.s3.model.ObjectIdentifier
 import aws.sdk.kotlin.services.s3.model.PutObjectRequest
+import aws.sdk.kotlin.services.s3.model.UploadPartRequest
 import aws.sdk.kotlin.services.s3.presigners.presignGetObject
 import aws.sdk.kotlin.services.s3.presigners.presignPutObject
+import aws.sdk.kotlin.services.s3.presigners.presignUploadPart
 import aws.smithy.kotlin.runtime.auth.awscredentials.Credentials
 import aws.smithy.kotlin.runtime.net.url.Url
+import aws.smithy.kotlin.runtime.ServiceException
 import com.jasongzy.s3pocket.data.model.BucketItem
 import com.jasongzy.s3pocket.data.model.ObjectDetails
 import com.jasongzy.s3pocket.data.model.ObjectItem
@@ -25,12 +33,14 @@ import com.jasongzy.s3pocket.data.model.UpdateObject
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.io.InputStream
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
@@ -41,6 +51,8 @@ import okio.BufferedSink
 class S3ObjectStorage(
   private val profile: StorageProfile,
   private val httpClient: OkHttpClient,
+  private val regionResolver: BucketRegionResolver,
+  private val capabilities: StorageCapabilityCache,
 ) : ObjectStorage {
   override suspend fun listBuckets(): List<BucketItem> = withClient { client ->
     client.listBuckets().buckets.orEmpty().map { bucket ->
@@ -48,22 +60,26 @@ class S3ObjectStorage(
     }
   }
 
-  override suspend fun listObjects(bucket: String, prefix: String): List<ObjectItem> = withClient { client ->
-    val result = mutableListOf<ObjectItem>()
-    var token: String? = null
-    do {
-      val response = client.listObjectsV2 {
-        this.bucket = bucket
-        this.prefix = prefix
-        delimiter = "/"
-        continuationToken = token
-      }
-      result += response.commonPrefixes.orEmpty().mapNotNull { item ->
+  override suspend fun listObjects(
+    bucket: String,
+    prefix: String,
+    continuationToken: String?,
+    pageSize: Int,
+  ): ObjectPage = withClient(bucket) { client ->
+    require(pageSize in 1..1000) { "Page size must be between 1 and 1000" }
+    val response = client.listObjectsV2 {
+      this.bucket = bucket
+      this.prefix = prefix
+      delimiter = "/"
+      this.continuationToken = continuationToken
+      maxKeys = pageSize
+    }
+    val result =
+      response.commonPrefixes.orEmpty().mapNotNull { item ->
         item.prefix?.takeIf { it != prefix }?.let { key ->
           ObjectItem(key = key, name = key.removePrefix(prefix).removeSuffix("/"), isFolder = true)
         }
-      }
-      result += response.contents.orEmpty().mapNotNull { item ->
+      } + response.contents.orEmpty().mapNotNull { item ->
         val key = item.key ?: return@mapNotNull null
         if (key == prefix) return@mapNotNull null
         ObjectItem(
@@ -75,12 +91,15 @@ class S3ObjectStorage(
           etag = item.eTag,
         )
       }
-      token = response.nextContinuationToken
-    } while (token != null)
-    result.sortedWith(compareByDescending<ObjectItem> { it.isFolder }.thenBy { it.name.lowercase() })
+    ObjectPage(
+      items = result.distinctBy(ObjectItem::key),
+      nextToken = response.nextContinuationToken?.takeIf {
+        response.isTruncated == true && it != continuationToken
+      },
+    )
   }
 
-  override suspend fun getObjectDetails(bucket: String, key: String): ObjectDetails = withClient { client ->
+  override suspend fun getObjectDetails(bucket: String, key: String): ObjectDetails = withClient(bucket) { client ->
     val response = client.headObject {
       this.bucket = bucket
       this.key = key
@@ -97,7 +116,7 @@ class S3ObjectStorage(
     )
   }
 
-  override suspend fun createPreviewUrl(bucket: String, key: String, expiryMinutes: Int): String = withClient { client ->
+  override suspend fun createPreviewUrl(bucket: String, key: String, expiryMinutes: Int): String = withClient(bucket) { client ->
     client.presignGetObject(
       GetObjectRequest {
         this.bucket = bucket
@@ -107,8 +126,23 @@ class S3ObjectStorage(
     ).url.toString()
   }
 
-  override suspend fun upload(bucket: String, request: UploadObject, source: UploadSource) {
-    val signed = withClient { client ->
+  override suspend fun upload(
+    bucket: String,
+    request: UploadObject,
+    source: UploadSource,
+    shouldCancel: () -> Boolean,
+    onProgress: (Long, Long) -> Unit,
+  ) {
+    if (request.contentLength >= MULTIPART_THRESHOLD_BYTES && capabilities.supportsMultipart(profile)) {
+      try {
+        uploadMultipart(bucket, request, source, shouldCancel, onProgress)
+        return
+      } catch (error: ServiceException) {
+        if (error.sdkErrorMetadata.errorCode !in UNSUPPORTED_MULTIPART_ERRORS) throw error
+        capabilities.markMultipartUnsupported(profile)
+      }
+    }
+    val signed = withClient(bucket) { client ->
       client.presignPutObject(
         PutObjectRequest {
           this.bucket = bucket
@@ -120,22 +154,20 @@ class S3ObjectStorage(
         TRANSFER_URL_EXPIRY_MINUTES.minutes,
       )
     }
-    val body = object : RequestBody() {
-      override fun contentType() = request.contentType.toMediaTypeOrNull()
-
-      override fun contentLength() = request.contentLength
-
-      override fun writeTo(sink: BufferedSink) {
-        source.open().use { input -> input.copyTo(sink.outputStream()) }
-      }
-    }
+    val body = progressRequestBody(request.contentType, request.contentLength, source::open, shouldCancel, onProgress)
     val builder = Request.Builder().url(signed.url.toString()).put(body)
     signed.headers.forEach { key, values -> builder.header(key, values.joinToString(", ")) }
     withContext(Dispatchers.IO) { execute(builder.build()) { } }
   }
 
-  override suspend fun download(bucket: String, key: String, output: OutputStream) {
-    val signed = withClient { client ->
+  override suspend fun download(
+    bucket: String,
+    key: String,
+    output: OutputStream,
+    shouldCancel: () -> Boolean,
+    onProgress: (Long, Long) -> Unit,
+  ) {
+    val signed = withClient(bucket) { client ->
       client.presignGetObject(
         GetObjectRequest {
           this.bucket = bucket
@@ -146,12 +178,87 @@ class S3ObjectStorage(
     }
     val builder = Request.Builder().url(signed.url.toString()).get()
     signed.headers.forEach { name, values -> builder.header(name, values.joinToString(", ")) }
-    withContext(Dispatchers.IO) {
-      execute(builder.build()) { response -> response.body.byteStream().use { it.copyTo(output) } }
+    withContext(Dispatchers.IO + NonCancellable) {
+      execute(builder.build()) { response ->
+        val total = response.body.contentLength().coerceAtLeast(0)
+        response.body.byteStream().use { input ->
+          input.copyTo(output, shouldCancel) { completed -> onProgress(completed, total) }
+        }
+      }
     }
   }
 
-  override suspend fun objectExists(bucket: String, key: String): Boolean = withClient { client ->
+  private suspend fun uploadMultipart(
+    bucket: String,
+    request: UploadObject,
+    source: UploadSource,
+    shouldCancel: () -> Boolean,
+    onProgress: (Long, Long) -> Unit,
+  ) = withClient(bucket) { client ->
+    val created = client.createMultipartUpload {
+      this.bucket = bucket
+      key = request.key
+      contentType = request.contentType
+      metadata = request.metadata
+    }
+    val uploadId = requireNotNull(created.uploadId) { "S3 did not return a multipart upload ID" }
+    try {
+      val parts = mutableListOf<CompletedPart>()
+      var completedBytes = 0L
+      source.open().use { input ->
+        var partNumber = 1
+        while (true) {
+          if (shouldCancel()) throw TransferCanceledException()
+          val bytes = input.readPart(MULTIPART_PART_SIZE_BYTES)
+          if (bytes.isEmpty()) break
+          val signed = client.presignUploadPart(
+            UploadPartRequest {
+              this.bucket = bucket
+              key = request.key
+              this.uploadId = uploadId
+              this.partNumber = partNumber
+              contentLength = bytes.size.toLong()
+            },
+            TRANSFER_URL_EXPIRY_MINUTES.minutes,
+          )
+          val body = progressRequestBody(
+            request.contentType,
+            bytes.size.toLong(),
+            { ByteArrayInputStream(bytes) },
+            shouldCancel,
+          ) { partCompleted, _ -> onProgress(completedBytes + partCompleted, request.contentLength) }
+          val builder = Request.Builder().url(signed.url.toString()).put(body)
+          signed.headers.forEach { name, values -> builder.header(name, values.joinToString(", ")) }
+          val etag = execute(builder.build()) { response ->
+            requireNotNull(response.header("ETag")) { "S3 multipart response did not include an ETag" }
+          }
+          parts += CompletedPart { eTag = etag; this.partNumber = partNumber }
+          completedBytes += bytes.size
+          onProgress(completedBytes, request.contentLength)
+          partNumber++
+        }
+      }
+      client.completeMultipartUpload {
+        this.bucket = bucket
+        key = request.key
+        this.uploadId = uploadId
+        multipartUpload = CompletedMultipartUpload { this.parts = parts }
+      }
+    } catch (error: Throwable) {
+      withContext(NonCancellable) {
+        runCatching {
+          client.abortMultipartUpload {
+            this.bucket = bucket
+            key = request.key
+            this.uploadId = uploadId
+          }
+        }
+      }
+      throw error
+    }
+  }
+
+  override suspend fun objectExists(bucket: String, key: String): Boolean = withClient(bucket) { client ->
     client.listObjectsV2 {
       this.bucket = bucket
       prefix = key
@@ -172,7 +279,7 @@ class S3ObjectStorage(
     bucket: String,
     prefix: String,
     shouldCancel: () -> Boolean,
-  ): List<String> = withClient { client ->
+  ): List<String> = withClient(bucket) { client ->
     val keys = mutableListOf<String>()
     var token: String? = null
     do {
@@ -194,7 +301,7 @@ class S3ObjectStorage(
     keys: List<String>,
     shouldCancel: () -> Boolean,
     onProgress: (completed: Int, total: Int) -> Unit,
-  ) = withClient { client ->
+  ) = withClient(bucket) { client ->
     val distinctKeys = keys.distinct()
     onProgress(0, distinctKeys.size)
     var completed = 0
@@ -217,7 +324,7 @@ class S3ObjectStorage(
   }
 
   override suspend fun moveObjects(bucket: String, keys: List<String>, destinationPrefix: String) =
-    withClient { client ->
+    withClient(bucket) { client ->
       val prefix = destinationPrefix.trim('/').let { if (it.isEmpty()) "" else "$it/" }
       val moves = keys.distinct().map { source -> source to prefix + source.substringAfterLast('/') }
       require(moves.none { (source, target) -> source == target }) { "Source and destination are the same" }
@@ -242,7 +349,7 @@ class S3ObjectStorage(
       }
     }
 
-  override suspend fun updateObject(bucket: String, request: UpdateObject) = withClient { client ->
+  override suspend fun updateObject(bucket: String, request: UpdateObject) = withClient(bucket) { client ->
     if (request.sourceKey != request.targetKey) {
       val exists = client.listObjectsV2 {
         this.bucket = bucket
@@ -270,13 +377,14 @@ class S3ObjectStorage(
     Unit
   }
 
-  private suspend fun <T> withClient(block: suspend (S3Client) -> T): T =
-    withContext(Dispatchers.IO) {
-      createClient().use { client -> block(client) }
+  private suspend fun <T> withClient(bucket: String? = null, block: suspend (S3Client) -> T): T =
+    withContext(Dispatchers.IO + NonCancellable) {
+      val region = bucket?.let { regionResolver.resolve(profile, it) } ?: profile.region
+      createClient(region).use { client -> block(client) }
     }
 
-  private fun createClient() = S3Client {
-    region = profile.region
+  private fun createClient(resolvedRegion: String) = S3Client {
+    region = resolvedRegion
     profile.endpointOverride?.let { endpointUrl = Url.parse(it) }
     forcePathStyle = profile.forcePathStyle
     callTimeout = 30.seconds
@@ -290,14 +398,60 @@ class S3ObjectStorage(
       StaticCredentialsProvider(Credentials(profile.accessKeyId, profile.secretAccessKey))
   }
 
-  private fun execute(request: Request, block: (okhttp3.Response) -> Unit) {
+  private fun <T> execute(request: Request, block: (okhttp3.Response) -> T): T {
     httpClient.newCall(request).execute().use { response ->
       if (!response.isSuccessful) {
         val details = response.body.string().take(500)
         throw IOException("S3 request failed (${response.code}): $details")
       }
-      block(response)
+      return block(response)
     }
+  }
+
+  private fun progressRequestBody(
+    contentType: String,
+    contentLength: Long,
+    openSource: () -> InputStream,
+    shouldCancel: () -> Boolean,
+    onProgress: (Long, Long) -> Unit,
+  ) = object : RequestBody() {
+    override fun contentType() = contentType.toMediaTypeOrNull()
+
+    override fun contentLength() = contentLength
+
+    override fun writeTo(sink: BufferedSink) {
+      openSource().use { input ->
+        input.copyTo(sink.outputStream(), shouldCancel) { completed -> onProgress(completed, contentLength) }
+      }
+    }
+  }
+
+  private fun InputStream.copyTo(
+    output: OutputStream,
+    shouldCancel: () -> Boolean,
+    onProgress: (Long) -> Unit,
+  ) {
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var completed = 0L
+    while (true) {
+      if (shouldCancel()) throw TransferCanceledException()
+      val count = read(buffer)
+      if (count < 0) break
+      output.write(buffer, 0, count)
+      completed += count
+      onProgress(completed)
+    }
+  }
+
+  private fun InputStream.readPart(maxBytes: Int): ByteArray {
+    val buffer = ByteArray(maxBytes)
+    var count = 0
+    while (count < maxBytes) {
+      val read = read(buffer, count, maxBytes - count)
+      if (read < 0) break
+      count += read
+    }
+    return if (count == buffer.size) buffer else buffer.copyOf(count)
   }
 
   private fun String.encodePath(): String =
@@ -306,5 +460,8 @@ class S3ObjectStorage(
   private companion object {
     const val DELETE_BATCH_SIZE = 100
     const val TRANSFER_URL_EXPIRY_MINUTES = 15
+    const val MULTIPART_THRESHOLD_BYTES = 16L * 1024 * 1024
+    const val MULTIPART_PART_SIZE_BYTES = 8 * 1024 * 1024
+    val UNSUPPORTED_MULTIPART_ERRORS = setOf("NotImplemented", "UnsupportedOperation", "InvalidRequest")
   }
 }

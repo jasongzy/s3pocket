@@ -68,6 +68,7 @@
     <string name="search_files">Search this folder</string>
     <string name="search_hint">Search names</string>
     <string name="no_search_results">No matching items</string>
+    <string name="searching_items">Searching… %1$d items scanned</string>
     <string name="path_navigation">Navigate to parent folder</string>
     <string name="reorder_profiles">Long-press and drag to reorder</string>
     <string name="profile_info">Profile information</string>
@@ -114,7 +115,7 @@
     <string name="unknown_file_size">The document provider did not report a file size.</string>
     <string name="file_summary">%1$s · %2$s</string>
     <string name="upload_file">Upload file</string>
-    <string name="upload_local_file">Choose local file</string>
+    <string name="upload_local_file">Upload from file</string>
     <string name="upload_from_url">Upload from URL</string>
     <string name="source_url">Source URL</string>
     <string name="url_download_description">The file is downloaded to the app cache, then uploaded directly to the current folder.</string>
@@ -190,6 +191,8 @@
     <string name="files_and_links">Files and links</string>
     <string name="data_and_security">Data and security</string>
     <string name="advanced">Advanced</string>
+    <string name="advanced_settings_enabled">Advanced settings enabled</string>
+    <string name="advanced_settings_hidden">Advanced settings hidden</string>
     <string name="color_palette">Color palette</string>
     <string name="palette_dynamic">Dynamic system colors</string>
     <string name="palette_purple">Purple</string>
@@ -237,4 +240,24 @@
     <string name="github">GitHub</string>
     <string name="github_description">github.com/jasongzy/s3pocket</string>
     <string name="version">Version</string>
+    <string name="transfers">Transfers</string>
+    <string name="transfer_notification">Transferring %1$d files</string>
+    <string name="transfer_bytes">%1$s of %2$s</string>
+    <string name="retry">Retry</string>
+    <string name="upload_folder">Upload from folder</string>
+    <plurals name="uploaded_count">
+        <item quantity="one">Uploaded %1$d file</item>
+        <item quantity="other">Uploaded %1$d files</item>
+    </plurals>
+    <plurals name="shared_files_waiting">
+        <item quantity="one">%1$d shared file is waiting</item>
+        <item quantity="other">%1$d shared files are waiting</item>
+    </plurals>
+    <string name="upload_here">Upload here</string>
+    <plurals name="choose_shared_destination">
+        <item quantity="one">Choose a destination for the shared file</item>
+        <item quantity="other">Choose a destination for the %1$d shared files</item>
+    </plurals>
+    <string name="gallery_view">Gallery view</string>
+    <string name="list_view">List view</string>
 </resources>

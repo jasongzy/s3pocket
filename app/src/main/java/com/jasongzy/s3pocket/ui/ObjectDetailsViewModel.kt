@@ -1,6 +1,5 @@
 package com.jasongzy.s3pocket.ui
 
-import android.content.ContentResolver
 import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.ViewModel
@@ -13,6 +12,9 @@ import com.jasongzy.s3pocket.data.model.UpdateObject
 import com.jasongzy.s3pocket.data.model.FavoriteItem
 import com.jasongzy.s3pocket.data.model.FavoriteKind
 import com.jasongzy.s3pocket.data.storage.StorageFactory
+import com.jasongzy.s3pocket.data.transfer.DownloadTransfer
+import com.jasongzy.s3pocket.data.transfer.TransferManager
+import com.jasongzy.s3pocket.data.transfer.TransferStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +41,8 @@ data class ObjectDetailsUiState(
   val isLoading: Boolean = true,
   val isDownloading: Boolean = false,
   val downloadComplete: Boolean = false,
+  val downloadProgress: Float? = null,
+  val downloadError: String? = null,
   val error: String? = null,
 )
 
@@ -49,9 +53,10 @@ class ObjectDetailsViewModel(
   private val profiles: ProfileRepository,
   private val settings: SettingsRepository,
   private val storageFactory: StorageFactory,
-  private val contentResolver: ContentResolver,
+  private val transferManager: TransferManager,
 ) : ViewModel() {
   private var currentKey = key
+  private var downloadId: String? = null
   private val _state = MutableStateFlow(ObjectDetailsUiState())
   val state: StateFlow<ObjectDetailsUiState> = _state
   val favorites: StateFlow<List<FavoriteItem>> =
@@ -59,6 +64,30 @@ class ObjectDetailsViewModel(
 
   init {
     load()
+    viewModelScope.launch {
+      transferManager.items.collect { transfers ->
+        val transfer = transfers.firstOrNull { it.id == downloadId } ?: return@collect
+        when (transfer.status) {
+          TransferStatus.QUEUED, TransferStatus.RUNNING -> _state.update {
+            it.copy(
+              isDownloading = true,
+              downloadProgress = transfer.completedBytes.toFloat() / transfer.totalBytes.coerceAtLeast(1),
+            )
+          }
+          TransferStatus.COMPLETED -> _state.update {
+            it.copy(isDownloading = false, downloadProgress = null, downloadComplete = true)
+          }
+          TransferStatus.FAILED -> _state.update {
+            it.copy(isDownloading = false, downloadProgress = null, downloadError = transfer.error)
+          }
+          TransferStatus.CANCELED -> _state.update { it.copy(isDownloading = false, downloadProgress = null) }
+        }
+        if (transfer.status == TransferStatus.COMPLETED || transfer.status == TransferStatus.CANCELED) {
+          transferManager.dismissFinished(listOf(transfer.id))
+          downloadId = null
+        }
+      }
+    }
   }
 
   fun load() {
@@ -143,27 +172,25 @@ class ObjectDetailsViewModel(
   }
 
   fun download(uri: Uri) {
-    viewModelScope.launch {
-      val startedAt = SystemClock.elapsedRealtime()
-      AppLog.debug(TAG) { "Download started" }
-      _state.update { it.copy(isDownloading = true, downloadComplete = false, error = null) }
-      runSuspendCatching {
-          val profile = profiles.get(profileId)
-          withContext(Dispatchers.IO) {
-            contentResolver.openOutputStream(uri)?.use { output ->
-              storageFactory.create(profile).download(bucket, currentKey, output)
-            } ?: error("Unable to open destination")
-          }
-        }
-        .onSuccess {
-          AppLog.debug(TAG) { "Download succeeded in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(isDownloading = false, downloadComplete = true) }
-        }
-        .onFailure { error ->
-          AppLog.error(TAG, error) { "Download failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(isDownloading = false, error = error.userMessage()) }
-        }
+    val details = _state.value.details ?: return
+    _state.update {
+      it.copy(isDownloading = true, downloadComplete = false, downloadProgress = 0f, downloadError = null, error = null)
     }
+    downloadId = transferManager.enqueueDownload(DownloadTransfer(profileId, bucket, uri, currentKey, details.size))
+  }
+
+  fun cancelDownload() {
+    downloadId?.let(transferManager::cancel)
+  }
+
+  fun retryDownload() {
+    downloadId?.let(transferManager::retry)
+    _state.update { it.copy(isDownloading = true, downloadError = null) }
+  }
+
+  override fun onCleared() {
+    downloadId?.let { transferManager.dismissFinished(listOf(it)) }
+    super.onCleared()
   }
 
   fun update(

@@ -4,5 +4,8 @@ import com.jasongzy.s3pocket.data.model.StorageProfile
 import okhttp3.OkHttpClient
 
 class StorageFactory(private val httpClient: OkHttpClient = OkHttpClient()) {
-  fun create(profile: StorageProfile): ObjectStorage = S3ObjectStorage(profile, httpClient)
+  private val regionResolver = BucketRegionResolver(httpClient)
+  private val capabilities = StorageCapabilityCache()
+
+  fun create(profile: StorageProfile): ObjectStorage = S3ObjectStorage(profile, httpClient, regionResolver, capabilities)
 }

@@ -56,6 +56,8 @@ class SettingsViewModel(
     repository.presignedUrlExpiryMinutes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 15)
   val allowRecursiveFolderDelete: StateFlow<Boolean> =
     repository.allowRecursiveFolderDelete.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+  val advancedSettingsEnabled: StateFlow<Boolean> =
+    repository.advancedSettingsEnabled.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
   private val _cacheBytes = MutableStateFlow(0L)
   val cacheBytes: StateFlow<Long> = _cacheBytes
   private val _backup = MutableStateFlow(BackupUiState())
@@ -97,6 +99,10 @@ class SettingsViewModel(
 
   fun setAllowRecursiveFolderDelete(enabled: Boolean) {
     viewModelScope.launch { repository.setAllowRecursiveFolderDelete(enabled) }
+  }
+
+  fun setAdvancedSettingsEnabled(enabled: Boolean) {
+    viewModelScope.launch { repository.setAdvancedSettingsEnabled(enabled) }
   }
 
   fun clearCache() {

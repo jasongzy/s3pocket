@@ -37,6 +37,12 @@ enum class ObjectSortMode {
   SIZE,
 }
 
+@Serializable
+enum class ObjectViewMode {
+  LIST,
+  GALLERY,
+}
+
 class SettingsRepository(private val context: Context) {
   private val json = Json
   val themeMode: Flow<ThemeMode> =
@@ -63,12 +69,18 @@ class SettingsRepository(private val context: Context) {
     }
   val objectSortAscending: Flow<Boolean> =
     context.settingsDataStore.data.map { it[OBJECT_SORT_ASCENDING] ?: true }
+  val objectViewMode: Flow<ObjectViewMode> =
+    context.settingsDataStore.data.map { preferences ->
+      preferences[OBJECT_VIEW_MODE]?.let(ObjectViewMode::valueOf) ?: ObjectViewMode.LIST
+    }
   val filePreviewEnabled: Flow<Boolean> =
     context.settingsDataStore.data.map { it[FILE_PREVIEW_ENABLED] ?: true }
   val presignedUrlExpiryMinutes: Flow<Int> =
     context.settingsDataStore.data.map { it[PRESIGNED_URL_EXPIRY_MINUTES] ?: DEFAULT_PRESIGNED_URL_EXPIRY_MINUTES }
   val allowRecursiveFolderDelete: Flow<Boolean> =
     context.settingsDataStore.data.map { it[ALLOW_RECURSIVE_FOLDER_DELETE] ?: false }
+  val advancedSettingsEnabled: Flow<Boolean> =
+    context.settingsDataStore.data.map { it[ADVANCED_SETTINGS_ENABLED] ?: false }
 
   suspend fun setThemeMode(mode: ThemeMode) {
     context.settingsDataStore.edit { it[THEME_MODE] = mode.name }
@@ -97,6 +109,10 @@ class SettingsRepository(private val context: Context) {
     }
   }
 
+  suspend fun setObjectViewMode(mode: ObjectViewMode) {
+    context.settingsDataStore.edit { it[OBJECT_VIEW_MODE] = mode.name }
+  }
+
   suspend fun setFilePreviewEnabled(enabled: Boolean) {
     context.settingsDataStore.edit { it[FILE_PREVIEW_ENABLED] = enabled }
   }
@@ -110,6 +126,10 @@ class SettingsRepository(private val context: Context) {
     context.settingsDataStore.edit { it[ALLOW_RECURSIVE_FOLDER_DELETE] = enabled }
   }
 
+  suspend fun setAdvancedSettingsEnabled(enabled: Boolean) {
+    context.settingsDataStore.edit { it[ADVANCED_SETTINGS_ENABLED] = enabled }
+  }
+
   suspend fun snapshot(languageTag: String): AppSettingsSnapshot = AppSettingsSnapshot(
     themeMode = themeMode.first(),
     logLevel = logLevel.first(),
@@ -118,6 +138,7 @@ class SettingsRepository(private val context: Context) {
     metadataTemplate = metadataTemplate.first(),
     objectSort = objectSort.first(),
     objectSortAscending = objectSortAscending.first(),
+    objectViewMode = objectViewMode.first(),
     filePreviewEnabled = filePreviewEnabled.first(),
     presignedUrlExpiryMinutes = presignedUrlExpiryMinutes.first(),
     allowRecursiveFolderDelete = allowRecursiveFolderDelete.first(),
@@ -133,6 +154,7 @@ class SettingsRepository(private val context: Context) {
       it[METADATA_TEMPLATE] = json.encodeToString(snapshot.metadataTemplate)
       it[OBJECT_SORT] = snapshot.objectSort.name
       it[OBJECT_SORT_ASCENDING] = snapshot.objectSortAscending
+      it[OBJECT_VIEW_MODE] = snapshot.objectViewMode.name
       it[FILE_PREVIEW_ENABLED] = snapshot.filePreviewEnabled
       it[PRESIGNED_URL_EXPIRY_MINUTES] = snapshot.presignedUrlExpiryMinutes.coerceIn(1, MAX_PRESIGNED_URL_EXPIRY_MINUTES)
       it[ALLOW_RECURSIVE_FOLDER_DELETE] = snapshot.allowRecursiveFolderDelete
@@ -147,9 +169,11 @@ class SettingsRepository(private val context: Context) {
     val METADATA_TEMPLATE = stringPreferencesKey("metadata_template")
     val OBJECT_SORT = stringPreferencesKey("object_sort")
     val OBJECT_SORT_ASCENDING = booleanPreferencesKey("object_sort_ascending")
+    val OBJECT_VIEW_MODE = stringPreferencesKey("object_view_mode")
     val FILE_PREVIEW_ENABLED = booleanPreferencesKey("file_preview_enabled")
     val PRESIGNED_URL_EXPIRY_MINUTES = intPreferencesKey("presigned_url_expiry_minutes")
     val ALLOW_RECURSIVE_FOLDER_DELETE = booleanPreferencesKey("allow_recursive_folder_delete")
+    val ADVANCED_SETTINGS_ENABLED = booleanPreferencesKey("advanced_settings_enabled")
   }
 }
 
@@ -165,6 +189,7 @@ data class AppSettingsSnapshot(
   val metadataTemplate: Map<String, String> = emptyMap(),
   val objectSort: ObjectSortMode = ObjectSortMode.NAME,
   val objectSortAscending: Boolean = true,
+  val objectViewMode: ObjectViewMode = ObjectViewMode.LIST,
   val filePreviewEnabled: Boolean = true,
   val presignedUrlExpiryMinutes: Int = DEFAULT_PRESIGNED_URL_EXPIRY_MINUTES,
   val allowRecursiveFolderDelete: Boolean = false,

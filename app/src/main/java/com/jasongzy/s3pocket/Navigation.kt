@@ -28,6 +28,7 @@ import com.jasongzy.s3pocket.data.model.FavoriteKind
 fun MainNavigation(
   predictiveBackEnabled: Boolean,
   sharedUris: List<Uri>,
+  openSharedImmediately: Boolean,
   onSharedUrisConsumed: () -> Unit,
 ) {
   val backStack = rememberNavBackStack(ProfilesRoute)
@@ -55,6 +56,7 @@ fun MainNavigation(
         entry<ProfilesRoute> {
           ProfilesScreen(
             repository = container.profileRepository,
+            pendingSharedCount = sharedUris.size.takeIf { !openSharedImmediately } ?: 0,
             onAdd = { backStack.add(ProfileEditorRoute()) },
             onEdit = { backStack.add(ProfileEditorRoute(it)) },
             onInfo = { backStack.add(ProfileInfoRoute(it)) },
@@ -114,6 +116,8 @@ fun MainNavigation(
             repository = container.profileRepository,
             storageFactory = container.storageFactory,
             settingsRepository = container.settingsRepository,
+            transferManager = container.transferManager,
+            thumbnailUrls = container.thumbnailUrls,
             onBack = { backStack.removeLastOrNull() },
             onOpenFolder = { backStack.add(ObjectsRoute(route.profileId, route.bucket, it)) },
             onOpenObject = { backStack.add(ObjectDetailsRoute(route.profileId, route.bucket, it)) },
@@ -130,6 +134,7 @@ fun MainNavigation(
               }
             },
             sharedUris = sharedUris,
+            openSharedImmediately = openSharedImmediately,
             onSharedUrisConsumed = onSharedUrisConsumed,
           )
         }
@@ -141,6 +146,7 @@ fun MainNavigation(
             repository = container.profileRepository,
             settingsRepository = container.settingsRepository,
             storageFactory = container.storageFactory,
+            transferManager = container.transferManager,
             onBack = { backStack.removeLastOrNull() },
             onRenamed = { newKey ->
               backStack.removeLastOrNull()

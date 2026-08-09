@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +59,7 @@ import com.jasongzy.s3pocket.data.PaletteMode
 
 private const val GITHUB_URL = "https://github.com/jasongzy/s3pocket"
 private val PRESIGNED_EXPIRY_OPTIONS = listOf(5, 15, 60, 360, 1_440, 10_080)
+private const val ADVANCED_SETTINGS_TAPS = 7
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +82,7 @@ fun SettingsScreen(
   val filePreviewEnabled by viewModel.filePreviewEnabled.collectAsStateWithLifecycle()
   val presignedUrlExpiryMinutes by viewModel.presignedUrlExpiryMinutes.collectAsStateWithLifecycle()
   val allowRecursiveFolderDelete by viewModel.allowRecursiveFolderDelete.collectAsStateWithLifecycle()
+  val advancedSettingsEnabled by viewModel.advancedSettingsEnabled.collectAsStateWithLifecycle()
   val cacheBytes by viewModel.cacheBytes.collectAsStateWithLifecycle()
   var editMetadataTemplate by remember { mutableStateOf(false) }
   var includeSettings by remember { mutableStateOf(true) }
@@ -88,6 +91,7 @@ fun SettingsScreen(
   var choosePalette by remember { mutableStateOf(false) }
   var chooseLanguage by remember { mutableStateOf(false) }
   var chooseLogLevel by remember { mutableStateOf(false) }
+  var versionTapCount by remember { mutableIntStateOf(0) }
   val backup by viewModel.backup.collectAsStateWithLifecycle()
   val languageTag = remember(configuration) { AppCompatDelegate.getApplicationLocales().toLanguageTags() }
   val uriHandler = LocalUriHandler.current
@@ -229,14 +233,16 @@ fun SettingsScreen(
           }
         }
       }
-      item {
-        SettingsSection(title = stringResource(R.string.advanced)) {
-          SettingsValueRow(
-            title = stringResource(R.string.logging),
-            value = logLevel.label(),
-            description = stringResource(R.string.logging_description),
-            onClick = { chooseLogLevel = true },
-          )
+      if (advancedSettingsEnabled) {
+        item {
+          SettingsSection(title = stringResource(R.string.advanced)) {
+            SettingsValueRow(
+              title = stringResource(R.string.logging),
+              value = logLevel.label(),
+              description = stringResource(R.string.logging_description),
+              onClick = { chooseLogLevel = true },
+            )
+          }
         }
       }
       item {
@@ -261,7 +267,19 @@ fun SettingsScreen(
           }
           SettingsDivider()
           Row(
-            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            modifier = Modifier.fillMaxWidth().clickable {
+              versionTapCount++
+              if (versionTapCount == ADVANCED_SETTINGS_TAPS) {
+                versionTapCount = 0
+                val enabled = !advancedSettingsEnabled
+                viewModel.setAdvancedSettingsEnabled(enabled)
+                Toast.makeText(
+                  context,
+                  if (enabled) R.string.advanced_settings_enabled else R.string.advanced_settings_hidden,
+                  Toast.LENGTH_SHORT,
+                ).show()
+              }
+            }.padding(20.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
             Text(stringResource(R.string.version), modifier = Modifier.weight(1f))

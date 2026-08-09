@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.IntentCompat
+import androidx.core.os.BundleCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jasongzy.s3pocket.data.ThemeMode
 import com.jasongzy.s3pocket.data.AppLog
@@ -26,10 +27,16 @@ import dev.hossain.highlight.ui.HighlightThemeProvider
 
 class MainActivity : AppCompatActivity() {
   private var sharedUris by mutableStateOf(emptyList<Uri>())
+  private var openSharedImmediately by mutableStateOf(false)
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    acceptSharedFile(intent)
+    if (savedInstanceState == null) {
+      acceptSharedFile(intent, openImmediately = false)
+    } else {
+      sharedUris = BundleCompat.getParcelableArrayList(savedInstanceState, SHARED_URIS_KEY, Uri::class.java).orEmpty()
+      openSharedImmediately = savedInstanceState.getBoolean(OPEN_SHARED_IMMEDIATELY_KEY)
+    }
 
     enableEdgeToEdge()
     setContent {
@@ -47,7 +54,10 @@ class MainActivity : AppCompatActivity() {
       S3PocketTheme(darkTheme = darkTheme, paletteMode = paletteMode) {
         HighlightThemeProvider(darkTheme = darkTheme) {
           Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            MainNavigation(predictiveBack, sharedUris) { sharedUris = emptyList() }
+            MainNavigation(predictiveBack, sharedUris, openSharedImmediately) {
+              sharedUris = emptyList()
+              openSharedImmediately = false
+            }
           }
         }
       }
@@ -57,18 +67,30 @@ class MainActivity : AppCompatActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    acceptSharedFile(intent)
+    acceptSharedFile(intent, openImmediately = true)
   }
 
-  private fun acceptSharedFile(intent: Intent) {
+  override fun onSaveInstanceState(outState: Bundle) {
+    outState.putParcelableArrayList(SHARED_URIS_KEY, ArrayList(sharedUris))
+    outState.putBoolean(OPEN_SHARED_IMMEDIATELY_KEY, openSharedImmediately)
+    super.onSaveInstanceState(outState)
+  }
+
+  private fun acceptSharedFile(intent: Intent, openImmediately: Boolean) {
     sharedUris = when (intent.action) {
       Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
       Intent.ACTION_SEND_MULTIPLE ->
         IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
       else -> return
     }
+    openSharedImmediately = openImmediately
   }
 
   private val container: AppContainer
     get() = (application as S3PocketApplication).container
+
+  private companion object {
+    const val SHARED_URIS_KEY = "shared_uris"
+    const val OPEN_SHARED_IMMEDIATELY_KEY = "open_shared_immediately"
+  }
 }

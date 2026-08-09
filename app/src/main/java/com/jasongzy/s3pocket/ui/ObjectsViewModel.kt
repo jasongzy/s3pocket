@@ -3,29 +3,33 @@ package com.jasongzy.s3pocket.ui
 import android.content.ContentResolver
 import android.net.Uri
 import android.os.SystemClock
-import java.io.File
-import java.net.URL
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.jasongzy.s3pocket.data.ProfileRepository
+import java.io.File
+import java.net.URL
 import com.jasongzy.s3pocket.data.AppLog
 import com.jasongzy.s3pocket.data.ObjectSortMode
+import com.jasongzy.s3pocket.data.ObjectViewMode
+import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.SettingsRepository
-import com.jasongzy.s3pocket.data.model.ObjectItem
 import com.jasongzy.s3pocket.data.model.FavoriteItem
-import com.jasongzy.s3pocket.data.model.UploadObject
-import com.jasongzy.s3pocket.data.storage.StorageFactory
-import com.jasongzy.s3pocket.data.storage.UploadSource
+import com.jasongzy.s3pocket.data.model.ObjectItem
 import com.jasongzy.s3pocket.data.storage.DeleteCanceledException
+import com.jasongzy.s3pocket.data.storage.ObjectStorage
+import com.jasongzy.s3pocket.data.storage.StorageFactory
+import com.jasongzy.s3pocket.data.transfer.TransferManager
+import com.jasongzy.s3pocket.data.transfer.TransferStatus
+import com.jasongzy.s3pocket.data.transfer.UploadTransfer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -53,11 +57,21 @@ data class ObjectsUiState(
   val isCancelingDelete: Boolean = false,
   val deleteCanceled: Boolean = false,
   val uploadProgress: UploadProgress? = null,
+  val uploadedCount: Int? = null,
+  val nextContinuationToken: String? = null,
+  val isLoadingMore: Boolean = false,
+  val isScanning: Boolean = false,
 )
 
 data class DeleteProgress(val completed: Int, val total: Int)
 
-data class UploadProgress(val completed: Int, val total: Int)
+data class UploadProgress(
+  val completed: Int,
+  val total: Int,
+  val completedBytes: Long = 0,
+  val totalBytes: Long = 0,
+  val error: String? = null,
+)
 
 data class BatchUploadItem(
   val uri: Uri,
@@ -76,115 +90,182 @@ class ObjectsViewModel(
   private val storageFactory: StorageFactory,
   private val contentResolver: ContentResolver,
   private val cacheDir: File,
+  private val transferManager: TransferManager,
 ) : ViewModel() {
   @Volatile private var deleteCancelRequested = false
+  private var scanJob: Job? = null
+  private var listingGeneration = 0
+  private var scanGeneration = 0
   private val httpClient = OkHttpClient()
   private val _state = MutableStateFlow(ObjectsUiState())
+  private val uploadIds = mutableSetOf<String>()
+  private var uploadsRefreshed = false
   val state: StateFlow<ObjectsUiState> = _state
   val favorites: StateFlow<List<FavoriteItem>> =
     profiles.favorites.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
   init {
     refresh()
+    viewModelScope.launch {
+      transferManager.items.collect { transfers ->
+        val uploads = transfers.filter { it.id in uploadIds }
+        if (uploads.isEmpty()) return@collect
+        val active = uploads.filter { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING }
+        val failed = uploads.firstOrNull { it.status == TransferStatus.FAILED }
+        val completed = uploads.count { it.status == TransferStatus.COMPLETED }
+        _state.update {
+          it.copy(
+            isUploading = active.isNotEmpty(),
+            uploadProgress = UploadProgress(
+              completed = completed,
+              total = uploads.size,
+              completedBytes = uploads.sumOf { transfer -> transfer.completedBytes },
+              totalBytes = uploads.sumOf { transfer -> transfer.totalBytes },
+              error = failed?.error,
+            ).takeIf { active.isNotEmpty() || failed != null },
+          )
+        }
+        if (active.isEmpty() && failed == null && !uploadsRefreshed) {
+          uploadsRefreshed = true
+          val uploadedCount = uploads.count { it.status == TransferStatus.COMPLETED }
+          _state.update { it.copy(uploadedCount = uploadedCount.takeIf { count -> count == uploads.size }) }
+          refresh()
+          transferManager.dismissFinished(uploadIds)
+          uploadIds.clear()
+        }
+      }
+    }
   }
 
   fun refresh() {
+    val generation = ++listingGeneration
+    scanGeneration++
+    scanJob = null
     viewModelScope.launch {
       val startedAt = SystemClock.elapsedRealtime()
       AppLog.debug(TAG) { "ListObjects started" }
-      _state.update { it.copy(isLoading = true, error = null, errorRes = null) }
-      runSuspendCatching {
-          val profile = profiles.get(profileId)
-          storageFactory.create(profile).listObjects(bucket, prefix)
-        }
-        .onSuccess { objects ->
-          AppLog.debug(TAG) { "ListObjects returned ${objects.size} items in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(objects = objects, isLoading = false) }
-        }
-        .onFailure { error ->
-          AppLog.error(TAG, error) { "ListObjects failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(isLoading = false, error = error.userMessage()) }
-        }
-    }
-  }
-
-  fun upload(uri: Uri, key: String, contentType: String, contentLength: Long, metadata: Map<String, String>) {
-    viewModelScope.launch {
-      val startedAt = SystemClock.elapsedRealtime()
-      AppLog.debug(TAG) { "Upload started ($contentLength bytes)" }
-      _state.update { it.copy(isUploading = true, error = null, errorRes = null) }
-      runSuspendCatching {
-          val profile = profiles.get(profileId)
-          withContext(Dispatchers.IO) {
-            storageFactory.create(profile).upload(
-              bucket = bucket,
-              request =
-                UploadObject(
-                  key = key,
-                  contentType = contentType.ifBlank { "application/octet-stream" },
-                  contentLength = contentLength,
-                  metadata = metadata,
-                ),
-              source = UploadSource { contentResolver.openInputStream(uri) ?: error("Unable to open selected file") },
-            )
-          }
-        }
-        .onSuccess {
-          AppLog.debug(TAG) { "Upload succeeded in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(isUploading = false) }
-          refresh()
-        }
-        .onFailure { error ->
-          AppLog.error(TAG, error) { "Upload failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(isUploading = false, error = error.userMessage()) }
-        }
-    }
-  }
-
-  fun uploadBatch(items: List<BatchUploadItem>) {
-    if (items.isEmpty()) return
-    viewModelScope.launch {
-      val startedAt = SystemClock.elapsedRealtime()
-      AppLog.debug(TAG) { "Batch upload started (${items.size} files)" }
       _state.update {
         it.copy(
-          isUploading = true,
-          uploadProgress = UploadProgress(0, items.size),
+          isLoading = true,
+          isLoadingMore = false,
+          isScanning = false,
+          nextContinuationToken = null,
           error = null,
           errorRes = null,
         )
       }
       runSuspendCatching {
           val profile = profiles.get(profileId)
-          val storage = storageFactory.create(profile)
-          items.forEachIndexed { index, item ->
-            withContext(Dispatchers.IO) {
-              storage.upload(
-                bucket = bucket,
-                request =
-                  UploadObject(
-                    key = item.key,
-                    contentType = item.contentType.ifBlank { "application/octet-stream" },
-                    contentLength = item.contentLength,
-                    metadata = item.metadata,
-                  ),
-                source = UploadSource { contentResolver.openInputStream(item.uri) ?: error("Unable to open shared file") },
-              )
-            }
-            _state.update { it.copy(uploadProgress = UploadProgress(index + 1, items.size)) }
+          storageFactory.create(profile).listObjects(bucket, prefix)
+        }
+        .onSuccess { page ->
+          if (generation != listingGeneration) return@onSuccess
+          AppLog.debug(TAG) { "ListObjects returned ${page.items.size} items in ${SystemClock.elapsedRealtime() - startedAt} ms" }
+          _state.update {
+            it.copy(objects = page.items, nextContinuationToken = page.nextToken, isLoading = false)
           }
         }
-        .onSuccess {
-          AppLog.debug(TAG) { "Batch upload succeeded in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(isUploading = false, uploadProgress = null) }
-          refresh()
-        }
         .onFailure { error ->
-          AppLog.error(TAG, error) { "Batch upload failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(isUploading = false, uploadProgress = null, error = error.userMessage()) }
+          if (generation != listingGeneration) return@onFailure
+          AppLog.error(TAG, error) { "ListObjects failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
+          _state.update { it.copy(isLoading = false, error = error.userMessage()) }
         }
     }
   }
+
+  fun loadMore() {
+    val snapshot = _state.value
+    val token = snapshot.nextContinuationToken ?: return
+    if (snapshot.isLoading || snapshot.isLoadingMore || snapshot.isScanning) return
+    val generation = listingGeneration
+    viewModelScope.launch { loadPage(token, generation = generation) }
+  }
+
+  fun setCompleteListingRequired(required: Boolean) {
+    if (!required) {
+      scanGeneration++
+      scanJob = null
+      _state.update { it.copy(isScanning = false) }
+      return
+    }
+    if (_state.value.nextContinuationToken == null || scanJob?.isActive == true) return
+    val currentScan = ++scanGeneration
+    val generation = listingGeneration
+    scanJob = viewModelScope.launch {
+      _state.update { it.copy(isScanning = true) }
+      try {
+        while (currentScan == scanGeneration && generation == listingGeneration) {
+          val token = _state.value.nextContinuationToken ?: break
+          if (!loadPage(token, scanning = true, generation = generation)) break
+        }
+      } finally {
+        if (currentScan == scanGeneration) {
+          scanJob = null
+          _state.update { it.copy(isScanning = false, isLoadingMore = false) }
+        }
+      }
+    }
+  }
+
+  private suspend fun loadPage(token: String, scanning: Boolean = false, generation: Int): Boolean {
+    _state.update { it.copy(isLoadingMore = !scanning, error = null, errorRes = null) }
+    return runSuspendCatching {
+        val profile = profiles.get(profileId)
+        storageFactory.create(profile).listObjects(bucket, prefix, token)
+      }
+      .fold(onSuccess = { page ->
+        if (generation != listingGeneration) return@fold false
+        _state.update { state ->
+          state.copy(
+            objects = (state.objects + page.items).distinctBy(ObjectItem::key),
+            nextContinuationToken = page.nextToken,
+            isLoadingMore = false,
+          )
+        }
+        true
+      }, onFailure = { error ->
+        if (generation != listingGeneration) return@fold false
+        AppLog.error(TAG, error) { "ListObjects page failed" }
+        _state.update { it.copy(isLoadingMore = false, isScanning = false, error = error.userMessage()) }
+        false
+      })
+  }
+
+  fun upload(uri: Uri, key: String, contentType: String, contentLength: Long, metadata: Map<String, String>) {
+    enqueueUploads(listOf(BatchUploadItem(uri, key, contentType, contentLength, metadata)))
+  }
+
+  fun uploadBatch(items: List<BatchUploadItem>) {
+    enqueueUploads(items)
+  }
+
+  private fun enqueueUploads(items: List<BatchUploadItem>) {
+    if (items.isEmpty()) return
+    uploadsRefreshed = false
+    val ids = transferManager.enqueue(items.map {
+      UploadTransfer(profileId, bucket, it.uri, it.key, it.contentType, it.contentLength, it.metadata)
+    })
+    uploadIds += ids
+    _state.update { it.copy(isUploading = true, uploadProgress = UploadProgress(0, items.size)) }
+  }
+
+  fun cancelUploads() {
+    val failed = transferManager.items.value.any { it.id in uploadIds && it.status == TransferStatus.FAILED }
+    if (failed) {
+      transferManager.dismissFinished(uploadIds)
+      uploadIds.clear()
+      _state.update { it.copy(isUploading = false, uploadProgress = null) }
+    } else {
+      transferManager.cancel(uploadIds)
+    }
+  }
+
+  fun retryUploads() {
+    transferManager.items.value.filter { it.id in uploadIds && it.status == TransferStatus.FAILED }
+      .forEach { transferManager.retry(it.id) }
+  }
+
+  fun consumeUploadedCount() = _state.update { it.copy(uploadedCount = null) }
 
   fun createFolder(name: String) {
     runOperation("CreateFolder") {
@@ -303,7 +384,7 @@ class ObjectsViewModel(
   private fun runOperation(
     operation: String,
     itemCount: Int = 1,
-    block: suspend (com.jasongzy.s3pocket.data.storage.ObjectStorage) -> Unit,
+    block: suspend (ObjectStorage) -> Unit,
   ) {
     viewModelScope.launch {
       val startedAt = SystemClock.elapsedRealtime()
@@ -328,13 +409,13 @@ class ObjectsViewModel(
     }
   }
 
-  private suspend fun createStorage(): com.jasongzy.s3pocket.data.storage.ObjectStorage {
+  private suspend fun createStorage(): ObjectStorage {
     val profile = profiles.get(profileId)
     return storageFactory.create(profile)
   }
 
   private suspend fun buildDeletePlan(
-    storage: com.jasongzy.s3pocket.data.storage.ObjectStorage,
+    storage: ObjectStorage,
     items: List<ObjectItem>,
   ): DeletePlan {
     val keys = items.filterNot { it.isFolder }.mapTo(mutableListOf()) { it.key }
@@ -349,7 +430,7 @@ class ObjectsViewModel(
   }
 
   private suspend fun deletePlan(
-    storage: com.jasongzy.s3pocket.data.storage.ObjectStorage,
+    storage: ObjectStorage,
     items: List<ObjectItem>,
     plan: DeletePlan,
   ) {
@@ -419,8 +500,12 @@ class ObjectsViewModel(
 
   fun consumeDownloadedSource() = _state.update { it.copy(downloadedSource = null) }
 
-  fun setSort(repository: SettingsRepository, mode: ObjectSortMode, ascending: Boolean) {
-    viewModelScope.launch { repository.setObjectSort(mode, ascending) }
+  fun setSort(mode: ObjectSortMode, ascending: Boolean) {
+    viewModelScope.launch { settings.setObjectSort(mode, ascending) }
+  }
+
+  fun setViewMode(mode: ObjectViewMode) {
+    viewModelScope.launch { settings.setObjectViewMode(mode) }
   }
 
   fun setFavorites(items: List<FavoriteItem>, enabled: Boolean, onSaved: () -> Unit) {
@@ -428,6 +513,11 @@ class ObjectsViewModel(
       profiles.setFavorites(items, enabled)
       onSaved()
     }
+  }
+
+  override fun onCleared() {
+    transferManager.dismissFinished(uploadIds)
+    super.onCleared()
   }
 
   private companion object {

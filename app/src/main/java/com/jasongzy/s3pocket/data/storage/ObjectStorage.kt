@@ -15,15 +15,32 @@ fun interface UploadSource {
 interface ObjectStorage {
   suspend fun listBuckets(): List<BucketItem>
 
-  suspend fun listObjects(bucket: String, prefix: String): List<ObjectItem>
+  suspend fun listObjects(
+    bucket: String,
+    prefix: String,
+    continuationToken: String? = null,
+    pageSize: Int = 500,
+  ): ObjectPage
 
   suspend fun getObjectDetails(bucket: String, key: String): ObjectDetails
 
   suspend fun createPreviewUrl(bucket: String, key: String, expiryMinutes: Int): String
 
-  suspend fun upload(bucket: String, request: UploadObject, source: UploadSource)
+  suspend fun upload(
+    bucket: String,
+    request: UploadObject,
+    source: UploadSource,
+    shouldCancel: () -> Boolean = { false },
+    onProgress: (completed: Long, total: Long) -> Unit = { _, _ -> },
+  )
 
-  suspend fun download(bucket: String, key: String, output: OutputStream)
+  suspend fun download(
+    bucket: String,
+    key: String,
+    output: OutputStream,
+    shouldCancel: () -> Boolean = { false },
+    onProgress: (completed: Long, total: Long) -> Unit = { _, _ -> },
+  )
 
   suspend fun objectExists(bucket: String, key: String): Boolean
 
@@ -43,4 +60,11 @@ interface ObjectStorage {
   suspend fun updateObject(bucket: String, request: UpdateObject)
 }
 
+data class ObjectPage(
+  val items: List<ObjectItem>,
+  val nextToken: String?,
+)
+
 class DeleteCanceledException : Exception()
+
+class TransferCanceledException : Exception()

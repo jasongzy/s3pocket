@@ -386,7 +386,7 @@ private fun ProfileCard(
     elevation = CardDefaults.cardElevation(defaultElevation = elevation),
   ) {
     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      ProviderBadge(profile.provider)
+      ProviderBadge(profile.provider, isAmazonS3 = profile.isAmazonS3)
       Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
         Text(profile.name, style = MaterialTheme.typography.titleMedium)
         Text(

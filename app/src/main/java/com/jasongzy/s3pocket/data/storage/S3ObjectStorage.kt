@@ -278,6 +278,7 @@ class S3ObjectStorage(
   private fun createClient() = S3Client {
     region = profile.region
     profile.endpointOverride?.let { endpointUrl = Url.parse(it) }
+    forcePathStyle = profile.forcePathStyle
     callTimeout = 30.seconds
     httpClient {
       connectTimeout = 10.seconds

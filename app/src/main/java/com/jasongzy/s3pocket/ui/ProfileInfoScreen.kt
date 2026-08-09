@@ -69,7 +69,7 @@ fun ProfileInfoScreen(
         Card(modifier = Modifier.fillMaxWidth()) {
           Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-              ProviderBadge(profile.provider)
+              ProviderBadge(profile.provider, isAmazonS3 = profile.isAmazonS3)
               Column {
                 Text(profile.name, style = MaterialTheme.typography.titleLarge)
                 Text(stringResource(if (profile.provider == StorageProvider.CLOUDFLARE_R2) R.string.provider_cloudflare_r2 else R.string.provider_aws_s3))

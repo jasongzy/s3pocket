@@ -13,8 +13,12 @@ data class StorageProfile(
   val managementApiToken: String = "",
   val regionName: String = "",
   val endpointUrl: String = "",
+  val forcePathStyle: Boolean = false,
   val publicBaseUrl: String = "",
 ) {
+  val isAmazonS3: Boolean
+    get() = provider == StorageProvider.AWS_S3 && isAmazonS3Endpoint(endpointUrl)
+
   val endpoint: String
     get() = when (provider) {
       StorageProvider.CLOUDFLARE_R2 -> "https://$accountId.r2.cloudflarestorage.com"
@@ -35,6 +39,12 @@ data class StorageProfile(
 
   fun publicObjectUrl(key: String): String? =
     publicBaseUrl.trim().trimEnd('/').takeIf { it.isNotEmpty() }?.let { "$it/${key.encodeUrlPath()}" }
+}
+
+fun isAmazonS3Endpoint(endpointUrl: String): Boolean {
+  if (endpointUrl.isBlank()) return true
+  val host = runCatching { java.net.URI(endpointUrl.trim()).host }.getOrNull()?.lowercase() ?: return false
+  return host == "amazonaws.com" || host.endsWith(".amazonaws.com")
 }
 
 private fun String.encodeUrlPath(): String =

@@ -75,6 +75,7 @@ fun MainNavigation(predictiveBackEnabled: Boolean) {
           ProfileEditorScreen(
             profileId = route.profileId,
             repository = container.profileRepository,
+            storageFactory = container.storageFactory,
             onBack = { backStack.removeLastOrNull() },
             onSaved = { profileId ->
               backStack.removeLastOrNull()

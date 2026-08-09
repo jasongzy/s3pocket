@@ -68,21 +68,34 @@ fun RefreshButton(onClick: () -> Unit) {
 }
 
 @Composable
-fun ProviderBadge(provider: StorageProvider, modifier: Modifier = Modifier) {
+fun ProviderBadge(provider: StorageProvider, modifier: Modifier = Modifier, isAmazonS3: Boolean = false) {
   val isR2 = provider == StorageProvider.CLOUDFLARE_R2
   Surface(
     modifier = modifier.size(48.dp),
     shape = RoundedCornerShape(14.dp),
     color = if (isR2) MaterialTheme.colorScheme.surfaceContainerHighest else Color(0xFF232F3E),
   ) {
-    SubcomposeAsyncImage(
-      model = if (isR2) CLOUDFLARE_LOGO_URL else AWS_LOGO_URL,
-      contentDescription = stringResource(if (isR2) R.string.provider_cloudflare_r2 else R.string.provider_aws_s3),
-      modifier = Modifier.fillMaxSize(),
-      contentScale = ContentScale.Crop,
-      loading = { ProviderText(if (isR2) "R2" else "S3", if (isR2) Color(0xFFF6821F) else Color.White) },
-      error = { ProviderText(if (isR2) "R2" else "S3", if (isR2) Color(0xFFF6821F) else Color.White) },
-    )
+    if (isR2) {
+      SubcomposeAsyncImage(
+        model = CLOUDFLARE_LOGO_URL,
+        contentDescription = stringResource(R.string.provider_cloudflare_r2),
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Crop,
+        loading = { ProviderText("R2", Color(0xFFF6821F)) },
+        error = { ProviderText("R2", Color(0xFFF6821F)) },
+      )
+    } else if (isAmazonS3) {
+      SubcomposeAsyncImage(
+        model = AWS_LOGO_URL,
+        contentDescription = stringResource(R.string.amazon_s3),
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Crop,
+        loading = { ProviderText("S3", Color.White) },
+        error = { ProviderText("S3", Color.White) },
+      )
+    } else {
+      ProviderText("S3", Color.White)
+    }
   }
 }
 

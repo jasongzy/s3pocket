@@ -1,5 +1,6 @@
 package com.jasongzy.s3pocket.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,16 +16,19 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -35,6 +39,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.model.StorageProvider
+import com.jasongzy.s3pocket.data.model.isAmazonS3Endpoint
+import com.jasongzy.s3pocket.data.storage.StorageFactory
 import com.jasongzy.s3pocket.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,9 +48,10 @@ import com.jasongzy.s3pocket.R
 fun ProfileEditorScreen(
   profileId: String?,
   repository: ProfileRepository,
+  storageFactory: StorageFactory,
   onBack: () -> Unit,
   onSaved: (String) -> Unit,
-  viewModel: ProfileEditorViewModel = viewModel { ProfileEditorViewModel(profileId, repository) },
+  viewModel: ProfileEditorViewModel = viewModel { ProfileEditorViewModel(profileId, repository, storageFactory) },
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
   var showSecret by remember { mutableStateOf(false) }
@@ -78,7 +85,7 @@ fun ProfileEditorScreen(
       }
       Card(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-          ProviderBadge(state.provider)
+          ProviderBadge(state.provider, isAmazonS3 = isAmazonS3Endpoint(state.endpoint))
           Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
               stringResource(if (state.provider == StorageProvider.CLOUDFLARE_R2) R.string.provider_cloudflare_r2 else R.string.provider_aws_s3),
@@ -148,6 +155,21 @@ fun ProfileEditorScreen(
           singleLine = true,
           modifier = Modifier.fillMaxWidth(),
         )
+        Row(
+          modifier = Modifier.fillMaxWidth().clickable { viewModel.updateForcePathStyle(!state.forcePathStyle) },
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text(stringResource(R.string.path_style_access))
+            Text(
+              stringResource(R.string.path_style_access_hint),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Switch(checked = state.forcePathStyle, onCheckedChange = viewModel::updateForcePathStyle)
+        }
       }
       OutlinedTextField(
         value = state.publicBaseUrl,
@@ -188,8 +210,20 @@ fun ProfileEditorScreen(
       )
       state.errorRes?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
       state.errorDetail?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Button(onClick = { viewModel.save(onSaved) }, enabled = !state.isLoading) {
+      if (state.testSucceeded) {
+        Text(stringResource(R.string.connection_test_succeeded), color = MaterialTheme.colorScheme.primary)
+      }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+      ) {
+        OutlinedButton(
+          onClick = viewModel::testConnection,
+          enabled = !state.isLoading && !state.isTesting,
+        ) {
+          Text(stringResource(if (state.isTesting) R.string.testing_connection else R.string.test_connection))
+        }
+        Button(onClick = { viewModel.save(onSaved) }, enabled = !state.isLoading && !state.isTesting) {
           Text(stringResource(if (state.isLoading) R.string.saving else R.string.save_and_connect))
         }
       }

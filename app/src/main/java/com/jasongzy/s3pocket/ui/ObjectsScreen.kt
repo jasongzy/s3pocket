@@ -37,11 +37,12 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -379,9 +380,6 @@ fun ObjectsScreen(
                 ) {
                   AppIcon(if (currentPathIsFavorite) R.drawable.ms_star_24 else R.drawable.ms_star_outline_24, null)
                 }
-                TooltipIconButton(stringResource(R.string.create_folder), { createFolder = true }) {
-                  AppIcon(R.drawable.ms_create_new_folder_24, null)
-                }
                 TooltipIconButton(stringResource(R.string.search_files), { searchActive = true }) {
                   AppIcon(R.drawable.ms_search_24, null)
                 }
@@ -470,12 +468,16 @@ fun ObjectsScreen(
     },
     floatingActionButton = {
       Box {
-        ExtendedFloatingActionButton(
+        FloatingActionButton(
           onClick = { showUploadSources = true },
-          icon = { AppIcon(R.drawable.ms_upload_file_24, null) },
-          text = { Text(stringResource(R.string.upload)) },
-        )
+        ) {
+          AppIcon(R.drawable.ms_upload_file_24, stringResource(R.string.more_actions))
+        }
         DropdownMenu(expanded = showUploadSources, onDismissRequest = { showUploadSources = false }) {
+          DropdownMenuItem(
+            text = { Text(stringResource(R.string.create_folder)) },
+            onClick = { showUploadSources = false; createFolder = true },
+          )
           DropdownMenuItem(
             text = { Text(stringResource(R.string.upload_local_file)) },
             onClick = { showUploadSources = false; picker.launch(arrayOf("*/*")) },
@@ -540,7 +542,7 @@ fun ObjectsScreen(
         )
       }
       when {
-        state.isLoading -> LoadingPane(PaddingValues())
+        state.isLoading && state.objects.isEmpty() -> LoadingPane(PaddingValues())
         state.error != null || state.errorRes != null ->
           MessagePane(
             stringResource(R.string.storage_request_failed),
@@ -562,63 +564,76 @@ fun ObjectsScreen(
             query,
             PaddingValues(),
           )
-        viewMode == ObjectViewMode.GALLERY -> LazyVerticalGrid(
-          columns = GridCells.Fixed(galleryThumbnailSize.columns),
-          contentPadding = PaddingValues(8.dp),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          verticalArrangement = Arrangement.spacedBy(8.dp),
+        viewMode == ObjectViewMode.GALLERY -> PullToRefreshBox(
+          isRefreshing = state.isLoading,
+          onRefresh = viewModel::refresh,
+          modifier = Modifier.fillMaxSize(),
         ) {
-          gridItems(displayedObjects, key = { it.key }) { item ->
-            GalleryObject(
-              item = item,
-              selected = item.key in selectedKeys,
-              thumbnailUrl = { thumbnailUrls.get(profileId, bucket, item.key) },
-              imageScale = galleryImageScale,
-              onClick = {
-                if (selectedKeys.isNotEmpty()) selectedKeys = selectedKeys.toggle(item.key)
-                else if (item.isFolder) onOpenFolder(item.key) else onOpenObject(item.key)
-              },
-              onLongClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                selectedKeys = selectedKeys.toggle(item.key)
-              },
-            )
-          }
-          if (state.nextContinuationToken != null && !state.isScanning) {
-            item(key = "load-more-${state.nextContinuationToken}") {
-              LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
-              LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
-          }
-          item { Spacer(Modifier.size(88.dp)) }
-        }
-        else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          items(displayedObjects, key = { it.key }) { item ->
-            ObjectRow(
-              item = item,
-              selected = item.key in selectedKeys,
-              onClick = {
-                if (selectedKeys.isNotEmpty()) {
+          LazyVerticalGrid(
+            columns = GridCells.Fixed(galleryThumbnailSize.columns),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            gridItems(displayedObjects, key = { it.key }) { item ->
+              GalleryObject(
+                item = item,
+                selected = item.key in selectedKeys,
+                thumbnailUrl = { thumbnailUrls.get(profileId, bucket, item.key) },
+                imageScale = galleryImageScale,
+                onClick = {
+                  if (selectedKeys.isNotEmpty()) selectedKeys = selectedKeys.toggle(item.key)
+                  else if (item.isFolder) onOpenFolder(item.key) else onOpenObject(item.key)
+                },
+                onLongClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                   selectedKeys = selectedKeys.toggle(item.key)
-                } else if (item.isFolder) {
-                  onOpenFolder(item.key)
-                } else {
-                  onOpenObject(item.key)
-                }
-              },
-              onLongClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                selectedKeys = selectedKeys.toggle(item.key)
-              },
-            )
-          }
-          if (state.nextContinuationToken != null && !state.isScanning) {
-            item(key = "load-more-${state.nextContinuationToken}") {
-              LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
-              LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+                },
+              )
             }
+            if (state.nextContinuationToken != null && !state.isScanning) {
+              item(key = "load-more-${state.nextContinuationToken}") {
+                LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+              }
+            }
+            item { Spacer(Modifier.size(88.dp)) }
           }
-          item { Spacer(Modifier.size(88.dp)) }
+        }
+        else -> PullToRefreshBox(
+          isRefreshing = state.isLoading,
+          onRefresh = viewModel::refresh,
+          modifier = Modifier.fillMaxSize(),
+        ) {
+          LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            items(displayedObjects, key = { it.key }) { item ->
+              ObjectRow(
+                item = item,
+                selected = item.key in selectedKeys,
+                onClick = {
+                  if (selectedKeys.isNotEmpty()) {
+                    selectedKeys = selectedKeys.toggle(item.key)
+                  } else if (item.isFolder) {
+                    onOpenFolder(item.key)
+                  } else {
+                    onOpenObject(item.key)
+                  }
+                },
+                onLongClick = {
+                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                  selectedKeys = selectedKeys.toggle(item.key)
+                },
+              )
+            }
+            if (state.nextContinuationToken != null && !state.isScanning) {
+              item(key = "load-more-${state.nextContinuationToken}") {
+                LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+              }
+            }
+            item { Spacer(Modifier.size(88.dp)) }
+          }
         }
       }
     }

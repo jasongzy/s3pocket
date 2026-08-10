@@ -6,6 +6,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -68,30 +70,40 @@ fun BucketsScreen(
       )
     }
   ) { padding ->
-    when {
-      state.isLoading -> LoadingPane(padding)
-      state.error != null -> MessagePane(
-        stringResource(R.string.load_buckets_error),
-        listOfNotNull(state.errorHintRes?.let { stringResource(it) }, state.error).joinToString("\n\n"),
-        padding,
-        stringResource(R.string.try_again),
-        viewModel::refresh,
-      )
-      state.buckets.isEmpty() -> MessagePane(stringResource(R.string.no_buckets), stringResource(R.string.no_buckets_description), padding)
-      else -> LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = padding,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        items(state.buckets, key = { it.name }) { bucket ->
-          BucketCard(
-            bucket,
-            onClick = { onOpenBucket(bucket.name) },
-            onLongClick = {
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              favoriteTarget = bucket
-            },
-          )
+    PullToRefreshBox(
+      isRefreshing = state.isLoading && state.buckets.isNotEmpty(),
+      onRefresh = viewModel::refresh,
+      modifier = Modifier.fillMaxSize().padding(padding),
+    ) {
+      when {
+        state.isLoading && state.buckets.isEmpty() -> LoadingPane(PaddingValues())
+        state.error != null -> MessagePane(
+          stringResource(R.string.load_buckets_error),
+          listOfNotNull(state.errorHintRes?.let { stringResource(it) }, state.error).joinToString("\n\n"),
+          PaddingValues(),
+          stringResource(R.string.try_again),
+          viewModel::refresh,
+        )
+        state.buckets.isEmpty() -> MessagePane(
+          stringResource(R.string.no_buckets),
+          stringResource(R.string.no_buckets_description),
+          PaddingValues(),
+        )
+        else -> LazyColumn(
+          modifier = Modifier.fillMaxSize(),
+          contentPadding = PaddingValues(vertical = 10.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          items(state.buckets, key = { it.name }) { bucket ->
+            BucketCard(
+              bucket,
+              onClick = { onOpenBucket(bucket.name) },
+              onLongClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                favoriteTarget = bucket
+              },
+            )
+          }
         }
       }
     }

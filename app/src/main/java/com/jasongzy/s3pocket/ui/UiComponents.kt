@@ -73,7 +73,7 @@ fun ProviderBadge(provider: StorageProvider, modifier: Modifier = Modifier, isAm
   Surface(
     modifier = modifier.size(48.dp),
     shape = RoundedCornerShape(14.dp),
-    color = if (isR2) MaterialTheme.colorScheme.surfaceContainerHighest else Color(0xFF232F3E),
+    color = if (isR2) Color(0xFFF6821F) else Color(0xFF232F3E),
   ) {
     if (isR2) {
       SubcomposeAsyncImage(
@@ -81,8 +81,8 @@ fun ProviderBadge(provider: StorageProvider, modifier: Modifier = Modifier, isAm
         contentDescription = stringResource(R.string.provider_cloudflare_r2),
         modifier = Modifier.fillMaxSize(),
         contentScale = ContentScale.Crop,
-        loading = { ProviderText("R2", Color(0xFFF6821F)) },
-        error = { ProviderText("R2", Color(0xFFF6821F)) },
+        loading = { ProviderText("R2", Color.White) },
+        error = { ProviderText("R2", Color.White) },
       )
     } else if (isAmazonS3) {
       SubcomposeAsyncImage(

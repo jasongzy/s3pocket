@@ -79,6 +79,14 @@
     <string name="add_r2_profile">添加连接</string>
     <string name="delete_profile_title">删除“%1$s”？</string>
     <string name="delete_profile_description">此连接的加密凭据将从本设备移除。</string>
+    <string name="credentials_unavailable_title">无法解密连接凭据</string>
+    <plurals name="credentials_unavailable_description">
+        <item quantity="other">%1$d 个连接对应的 Android Keystore 密钥已不可用。请重新填写秘密凭据，或移除这些连接；其他设置将继续保留。</item>
+    </plurals>
+    <string name="credentials_unavailable">需要重新填写凭据</string>
+    <string name="reenter_credentials">重新填写</string>
+    <string name="remove_connections">移除连接</string>
+    <string name="later">稍后处理</string>
     <string name="provider_cloudflare_r2">Cloudflare R2</string>
     <string name="provider_aws_s3">S3 兼容存储</string>
     <string name="amazon_s3">Amazon S3</string>

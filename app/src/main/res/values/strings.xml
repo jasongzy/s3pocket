@@ -88,6 +88,15 @@
     <string name="add_r2_profile">Add R2 profile</string>
     <string name="delete_profile_title">Delete %1$s?</string>
     <string name="delete_profile_description">The encrypted credentials for this profile will be removed from this device.</string>
+    <string name="credentials_unavailable_title">Credentials can’t be decrypted</string>
+    <plurals name="credentials_unavailable_description">
+        <item quantity="one">The Android Keystore key for %1$d connection is no longer available. Re-enter its secret credentials or remove the connection. Other settings are preserved.</item>
+        <item quantity="other">The Android Keystore key for %1$d connections is no longer available. Re-enter their secret credentials or remove the connections. Other settings are preserved.</item>
+    </plurals>
+    <string name="credentials_unavailable">Credentials need to be re-entered</string>
+    <string name="reenter_credentials">Re-enter</string>
+    <string name="remove_connections">Remove</string>
+    <string name="later">Later</string>
     <string name="provider_cloudflare_r2">Cloudflare R2</string>
     <string name="provider_aws_s3">S3-compatible</string>
     <string name="amazon_s3">Amazon S3</string>

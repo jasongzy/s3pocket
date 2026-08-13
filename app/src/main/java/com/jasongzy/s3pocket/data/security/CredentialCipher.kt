@@ -9,7 +9,13 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class CredentialCipher {
+interface CredentialCodec {
+  fun encrypt(value: String): String
+
+  fun decrypt(value: String): String
+}
+
+class CredentialCipher : CredentialCodec {
   private val key: SecretKey
     get() {
       val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
@@ -30,7 +36,7 @@ class CredentialCipher {
       return generator.generateKey()
     }
 
-  fun encrypt(value: String): String {
+  override fun encrypt(value: String): String {
     val cipher = Cipher.getInstance(TRANSFORMATION)
     cipher.init(Cipher.ENCRYPT_MODE, key)
     val iv = Base64.encodeToString(cipher.iv, Base64.NO_WRAP)
@@ -38,7 +44,7 @@ class CredentialCipher {
     return "$iv:$ciphertext"
   }
 
-  fun decrypt(value: String): String {
+  override fun decrypt(value: String): String {
     val (iv, ciphertext) = value.split(':', limit = 2)
     val cipher = Cipher.getInstance(TRANSFORMATION)
     cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))

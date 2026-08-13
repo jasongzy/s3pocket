@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -73,16 +74,22 @@ fun ProfilesScreen(
   onSettings: () -> Unit,
   viewModel: ProfilesViewModel = viewModel { ProfilesViewModel(repository) },
 ) {
-  val profiles by viewModel.profiles.collectAsStateWithLifecycle()
+  val state by viewModel.state.collectAsStateWithLifecycle()
+  val profiles = state.profiles
+  val unavailableCredentialIds = state.unavailableCredentialIds
   val context = LocalContext.current
   val favorites by viewModel.favorites.collectAsStateWithLifecycle()
   var deleting by remember { mutableStateOf<StorageProfile?>(null) }
+  var showCredentialRecovery by remember { mutableStateOf(false) }
   val orderedProfiles = remember { mutableStateListOf<StorageProfile>() }
   var dragState by remember { mutableStateOf<ItemDragState?>(null) }
   var pendingOrder by remember { mutableStateOf<List<String>?>(null) }
   val orderedFavorites = remember { mutableStateListOf<FavoriteItem>() }
   var favoriteDragState by remember { mutableStateOf<ItemDragState?>(null) }
   var pendingFavoriteOrder by remember { mutableStateOf<List<String>?>(null) }
+  LaunchedEffect(unavailableCredentialIds) {
+    showCredentialRecovery = unavailableCredentialIds.isNotEmpty()
+  }
   LaunchedEffect(profiles, dragState == null, pendingOrder) {
     val persistedOrder = profiles.map { it.id }
     if (dragState == null && (pendingOrder == null || pendingOrder == persistedOrder)) {
@@ -165,6 +172,7 @@ fun ProfilesScreen(
         }
         item { Text(stringResource(R.string.profiles), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) }
         itemsIndexed(orderedProfiles, key = { _, profile -> profile.id }) { index, profile ->
+          val credentialsAvailable = profile.id !in unavailableCredentialIds
           val activeDrag = dragState
           val isDragging = activeDrag?.itemId == profile.id
           val translation = activeDrag?.translationFor(index) ?: 0f
@@ -175,7 +183,8 @@ fun ProfilesScreen(
             isDragActive = activeDrag != null,
             isDragging = isDragging,
             translationY = translation,
-            onOpen = { onOpen(profile.id) },
+            credentialsAvailable = credentialsAvailable,
+            onOpen = { if (credentialsAvailable) onOpen(profile.id) else onEdit(profile.id) },
             onEdit = { onEdit(profile.id) },
             onInfo = { onInfo(profile.id) },
             onDelete = { deleting = profile },
@@ -218,7 +227,10 @@ fun ProfilesScreen(
               isDragActive = activeDrag != null,
               isDragging = isDragging,
               translationY = activeDrag?.translationFor(index) ?: 0f,
-              onOpen = { onOpenFavorite(favorite) },
+              onOpen = {
+                if (favorite.profileId in unavailableCredentialIds) onEdit(favorite.profileId)
+                else onOpenFavorite(favorite)
+              },
               onRemove = { viewModel.removeFavorite(favorite) { context.showFavoriteToast(false) } },
               onDragStart = { stride -> favoriteDragState = ItemDragState(favorite.id, index, index, 0f, stride) },
               onDrag = { offset, stride ->
@@ -257,6 +269,44 @@ fun ProfilesScreen(
         ) { Text(stringResource(R.string.delete)) }
       },
       dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.cancel)) } },
+    )
+  }
+  if (showCredentialRecovery && unavailableCredentialIds.isNotEmpty()) {
+    AlertDialog(
+      onDismissRequest = { showCredentialRecovery = false },
+      icon = { AppIcon(R.drawable.ms_warning_24, null, tint = MaterialTheme.colorScheme.error) },
+      title = { Text(stringResource(R.string.credentials_unavailable_title)) },
+      text = {
+        Text(
+          pluralStringResource(
+            R.plurals.credentials_unavailable_description,
+            unavailableCredentialIds.size,
+            unavailableCredentialIds.size,
+          )
+        )
+      },
+      confirmButton = {
+        TextButton(onClick = {
+          showCredentialRecovery = false
+          onEdit(unavailableCredentialIds.first())
+        }) {
+          Text(stringResource(R.string.reenter_credentials))
+        }
+      },
+      dismissButton = {
+        Row {
+          TextButton(onClick = { showCredentialRecovery = false }) { Text(stringResource(R.string.later)) }
+          TextButton(
+            onClick = {
+              viewModel.deleteAll(unavailableCredentialIds)
+              showCredentialRecovery = false
+            },
+            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+          ) {
+            Text(stringResource(R.string.remove_connections))
+          }
+        }
+      },
     )
   }
 }
@@ -362,6 +412,7 @@ private fun ProfileCard(
   isDragActive: Boolean,
   isDragging: Boolean,
   translationY: Float,
+  credentialsAvailable: Boolean,
   onOpen: () -> Unit,
   onEdit: () -> Unit,
   onInfo: () -> Unit,
@@ -418,6 +469,13 @@ private fun ProfileCard(
           stringResource(if (profile.provider == StorageProvider.CLOUDFLARE_R2) R.string.provider_cloudflare_r2 else R.string.provider_aws_s3),
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (!credentialsAvailable) {
+          Text(
+            stringResource(R.string.credentials_unavailable),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+          )
+        }
       }
       Row(verticalAlignment = Alignment.CenterVertically) {
         TooltipIconButton(stringResource(R.string.profile_info), onInfo) { AppIcon(R.drawable.ms_info_24, null) }

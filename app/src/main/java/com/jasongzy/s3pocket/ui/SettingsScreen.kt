@@ -7,6 +7,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -56,6 +58,9 @@ import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.ThemeMode
 import com.jasongzy.s3pocket.data.LogLevel
 import com.jasongzy.s3pocket.data.PaletteMode
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 private const val GITHUB_URL = "https://github.com/jasongzy/s3pocket"
 private val PRESIGNED_EXPIRY_OPTIONS = listOf(5, 15, 60, 360, 1_440, 10_080)
@@ -74,18 +79,10 @@ fun SettingsScreen(
   val viewModel: SettingsViewModel = viewModel {
     SettingsViewModel(repository, profiles, context.applicationContext as android.app.Application)
   }
-  val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
-  val logLevel by viewModel.logLevel.collectAsStateWithLifecycle()
-  val paletteMode by viewModel.paletteMode.collectAsStateWithLifecycle()
-  val predictiveBack by viewModel.predictiveBack.collectAsStateWithLifecycle()
-  val metadataTemplate by viewModel.metadataTemplate.collectAsStateWithLifecycle()
-  val filePreviewEnabled by viewModel.filePreviewEnabled.collectAsStateWithLifecycle()
-  val presignedUrlExpiryMinutes by viewModel.presignedUrlExpiryMinutes.collectAsStateWithLifecycle()
-  val allowRecursiveFolderDelete by viewModel.allowRecursiveFolderDelete.collectAsStateWithLifecycle()
-  val advancedSettingsEnabled by viewModel.advancedSettingsEnabled.collectAsStateWithLifecycle()
+  val settings by viewModel.settings.collectAsStateWithLifecycle()
   val cacheBytes by viewModel.cacheBytes.collectAsStateWithLifecycle()
   var editMetadataTemplate by remember { mutableStateOf(false) }
-  var includeSettings by remember { mutableStateOf(true) }
+  var includeSettings by rememberSaveable { mutableStateOf(true) }
   var choosePresignedExpiry by remember { mutableStateOf(false) }
   var chooseTheme by remember { mutableStateOf(false) }
   var choosePalette by remember { mutableStateOf(false) }
@@ -103,6 +100,7 @@ fun SettingsScreen(
   }
   LaunchedEffect(viewModel) {
     viewModel.backupEvents.collect { event ->
+      val needsBuckets = event is BackupEvent.Imported && event.hasUnassignedPublicUrls
       val message = when (event) {
         BackupEvent.Exported -> resources.getString(R.string.export_complete)
         is BackupEvent.Imported -> resources.getQuantityString(
@@ -111,9 +109,27 @@ fun SettingsScreen(
           event.profileCount,
         )
       }
-      Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+      Toast.makeText(
+        context,
+        if (needsBuckets) "$message\n${resources.getString(R.string.import_public_urls_need_buckets)}" else message,
+        if (needsBuckets) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+      ).show()
     }
   }
+  val snapshot = settings
+  if (snapshot == null) {
+    LoadingPane(PaddingValues())
+    return
+  }
+  val themeMode = snapshot.themeMode
+  val logLevel = snapshot.logLevel
+  val paletteMode = snapshot.paletteMode
+  val predictiveBack = snapshot.predictiveBack
+  val metadataTemplate = snapshot.metadataTemplate
+  val filePreviewEnabled = snapshot.filePreviewEnabled
+  val presignedUrlExpiryMinutes = snapshot.presignedUrlExpiryMinutes
+  val allowRecursiveFolderDelete = snapshot.allowRecursiveFolderDelete
+  val advancedSettingsEnabled = snapshot.advancedSettingsEnabled
 
   Scaffold(
     topBar = {
@@ -216,7 +232,13 @@ fun SettingsScreen(
               modifier = Modifier.padding(top = 12.dp),
               horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              Button(onClick = { exportLauncher.launch("s3pocket-backup.json") }, enabled = !backup.isWorking) {
+              Button(
+                onClick = {
+                  val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss", Locale.ROOT))
+                  exportLauncher.launch("s3pocket-backup-$timestamp.json")
+                },
+                enabled = !backup.isWorking,
+              ) {
                 AppIcon(R.drawable.ms_download_24, null, Modifier.size(18.dp))
                 Spacer(Modifier.size(8.dp))
                 Text(stringResource(R.string.export_profiles))

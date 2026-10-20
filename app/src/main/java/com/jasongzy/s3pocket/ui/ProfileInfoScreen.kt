@@ -30,6 +30,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.CloudflareMetricsRepository
@@ -47,6 +49,7 @@ fun ProfileInfoScreen(
   viewModel: ProfileInfoViewModel = viewModel { ProfileInfoViewModel(profileId, profiles, metricsRepository) },
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
+  LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.loadProfile() }
   val context = LocalContext.current
   Scaffold(
     topBar = {
@@ -62,7 +65,7 @@ fun ProfileInfoScreen(
     }
   ) { padding ->
     when {
-      state.isProfileLoading -> LoadingPane(padding)
+      state.isProfileLoading && state.profile == null -> LoadingPane(padding)
       state.profile == null -> MessagePane(stringResource(R.string.profile_info), state.profileError.orEmpty(), padding)
       else -> Column(
         modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
@@ -84,9 +87,18 @@ fun ProfileInfoScreen(
               AppIcon(R.drawable.ms_content_copy_24, null)
               Text(stringResource(R.string.copy_link))
             }
-            if (profile.publicBaseUrl.isNotBlank()) {
-              Text(stringResource(R.string.public_base_url), style = MaterialTheme.typography.labelLarge)
-              SelectionContainer { Text(profile.publicBaseUrl, style = MaterialTheme.typography.bodySmall) }
+            if (profile.publicBaseUrls.isNotEmpty()) {
+              Text(stringResource(R.string.public_urls), style = MaterialTheme.typography.labelLarge)
+              profile.publicBaseUrls.forEach { (bucket, url) ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                  Text(bucket, style = MaterialTheme.typography.labelMedium)
+                  SelectionContainer { Text(url, style = MaterialTheme.typography.bodySmall) }
+                }
+              }
+            }
+            if (profile.unassignedPublicUrl.isNotEmpty()) {
+              Text(stringResource(R.string.public_url_needs_bucket), color = MaterialTheme.colorScheme.error)
+              SelectionContainer { Text(profile.unassignedPublicUrl, style = MaterialTheme.typography.bodySmall) }
             }
           }
         }
@@ -131,10 +143,10 @@ fun ProfileInfoScreen(
 }
 
 @Composable
-private fun MessageCard(message: String, error: Boolean = false) {
+private fun MessageCard(message: String) {
   Card(modifier = Modifier.fillMaxWidth()) {
     SelectionContainer {
-      Text(message, modifier = Modifier.padding(16.dp), color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+      Text(message, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
   }
 }

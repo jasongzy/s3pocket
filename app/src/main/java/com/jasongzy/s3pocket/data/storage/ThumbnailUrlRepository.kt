@@ -31,7 +31,7 @@ class ThumbnailUrlRepository(
     cache[cacheKey]?.takeIf { it.validUntil.isAfter(now) }?.let { return it.url }
     return signingSlots.withPermit {
       cache[cacheKey]?.takeIf { it.validUntil.isAfter(Instant.now()) }?.url ?: run {
-        val expiryMinutes = settings.presignedUrlExpiryMinutes.first()
+        val expiryMinutes = settings.settings.first().presignedUrlExpiryMinutes
         val url = storageFactory.create(profile).createPreviewUrl(bucket, key, expiryMinutes)
         cache[cacheKey] = CachedUrl(url, Instant.now().plusSeconds(expiryMinutes * 60L - 30L))
         url

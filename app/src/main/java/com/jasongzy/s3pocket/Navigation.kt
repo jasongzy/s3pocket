@@ -23,10 +23,11 @@ import com.jasongzy.s3pocket.ui.SettingsScreen
 import com.jasongzy.s3pocket.ui.ProfileInfoScreen
 import com.jasongzy.s3pocket.ui.LocalSharedTransitionScope
 import com.jasongzy.s3pocket.data.model.FavoriteKind
+import com.jasongzy.s3pocket.data.AppSettingsSnapshot
 
 @Composable
 fun MainNavigation(
-  predictiveBackEnabled: Boolean,
+  settings: AppSettingsSnapshot,
   sharedUris: List<Uri>,
   openSharedImmediately: Boolean,
   onSharedUrisConsumed: () -> Unit,
@@ -43,7 +44,7 @@ fun MainNavigation(
         transitionSpec = { fadeIn(tween(90)) togetherWith fadeOut(tween(90)) },
         popTransitionSpec = { fadeIn(tween(90)) togetherWith fadeOut(tween(90)) },
         predictivePopTransitionSpec = { _ ->
-          if (predictiveBackEnabled) fadeIn(tween(90)) togetherWith fadeOut(tween(90))
+          if (settings.predictiveBack) fadeIn(tween(90)) togetherWith fadeOut(tween(90))
           else androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None
         },
         entryDecorators =
@@ -116,6 +117,7 @@ fun MainNavigation(
             repository = container.profileRepository,
             storageFactory = container.storageFactory,
             settingsRepository = container.settingsRepository,
+            settings = settings,
             transferManager = container.transferManager,
             thumbnailUrls = container.thumbnailUrls,
             onBack = { backStack.removeLastOrNull() },

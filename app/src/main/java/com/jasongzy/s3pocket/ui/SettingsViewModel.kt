@@ -8,11 +8,12 @@ import androidx.core.os.LocaleListCompat
 import coil3.SingletonImageLoader
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.jasongzy.s3pocket.data.AppSettingsSnapshot
+import com.jasongzy.s3pocket.data.LogLevel
+import com.jasongzy.s3pocket.data.PaletteMode
 import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.SettingsRepository
 import com.jasongzy.s3pocket.data.ThemeMode
-import com.jasongzy.s3pocket.data.LogLevel
-import com.jasongzy.s3pocket.data.PaletteMode
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -30,7 +31,7 @@ data class BackupUiState(
 
 sealed interface BackupEvent {
   data object Exported : BackupEvent
-  data class Imported(val profileCount: Int) : BackupEvent
+  data class Imported(val profileCount: Int, val hasUnassignedPublicUrls: Boolean) : BackupEvent
 }
 
 class SettingsViewModel(
@@ -40,24 +41,8 @@ class SettingsViewModel(
 ) : AndroidViewModel(application) {
   private val context = getApplication<Application>()
   private val contentResolver: ContentResolver = context.contentResolver
-  val themeMode: StateFlow<ThemeMode> =
-    repository.themeMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThemeMode.SYSTEM)
-  val logLevel: StateFlow<LogLevel> =
-    repository.logLevel.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LogLevel.ERRORS)
-  val paletteMode: StateFlow<PaletteMode> =
-    repository.paletteMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PaletteMode.DYNAMIC)
-  val predictiveBack: StateFlow<Boolean> =
-    repository.predictiveBack.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-  val metadataTemplate: StateFlow<Map<String, String>> =
-    repository.metadataTemplate.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
-  val filePreviewEnabled: StateFlow<Boolean> =
-    repository.filePreviewEnabled.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
-  val presignedUrlExpiryMinutes: StateFlow<Int> =
-    repository.presignedUrlExpiryMinutes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 15)
-  val allowRecursiveFolderDelete: StateFlow<Boolean> =
-    repository.allowRecursiveFolderDelete.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-  val advancedSettingsEnabled: StateFlow<Boolean> =
-    repository.advancedSettingsEnabled.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+  val settings: StateFlow<AppSettingsSnapshot?> =
+    repository.settings.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
   private val _cacheBytes = MutableStateFlow(0L)
   val cacheBytes: StateFlow<Long> = _cacheBytes
   private val _backup = MutableStateFlow(BackupUiState())
@@ -157,7 +142,7 @@ class SettingsViewModel(
         }
         .onSuccess { result ->
           _backup.value = BackupUiState()
-          _backupEvents.send(BackupEvent.Imported(result.profileCount))
+          _backupEvents.send(BackupEvent.Imported(result.profileCount, result.hasUnassignedPublicUrls))
         }
         .onFailure { _backup.value = BackupUiState(error = it.userMessage()) }
     }

@@ -58,51 +58,26 @@ enum class GalleryImageScale {
 
 class SettingsRepository(private val context: Context) {
   private val json = Json
-  val themeMode: Flow<ThemeMode> =
-    context.settingsDataStore.data.map { preferences ->
-      preferences[THEME_MODE]?.let(ThemeMode::valueOf) ?: ThemeMode.SYSTEM
-    }
-  val logLevel: Flow<LogLevel> =
-    context.settingsDataStore.data.map { preferences ->
-      preferences[LOG_LEVEL]?.let(LogLevel::valueOf) ?: LogLevel.ERRORS
-    }
-  val paletteMode: Flow<PaletteMode> =
-    context.settingsDataStore.data.map { preferences ->
-      preferences[PALETTE_MODE]?.let(PaletteMode::valueOf) ?: PaletteMode.DYNAMIC
-    }
-  val predictiveBack: Flow<Boolean> =
-    context.settingsDataStore.data.map { it[PREDICTIVE_BACK] ?: false }
-  val metadataTemplate: Flow<Map<String, String>> =
-    context.settingsDataStore.data.map { preferences ->
-      preferences[METADATA_TEMPLATE]?.let { json.decodeFromString<Map<String, String>>(it) }.orEmpty()
-    }
-  val objectSort: Flow<ObjectSortMode> =
-    context.settingsDataStore.data.map { preferences ->
-      preferences[OBJECT_SORT]?.let(ObjectSortMode::valueOf) ?: ObjectSortMode.NAME
-    }
-  val objectSortAscending: Flow<Boolean> =
-    context.settingsDataStore.data.map { it[OBJECT_SORT_ASCENDING] ?: true }
-  val objectViewMode: Flow<ObjectViewMode> =
-    context.settingsDataStore.data.map { preferences ->
-      preferences[OBJECT_VIEW_MODE]?.let(ObjectViewMode::valueOf) ?: ObjectViewMode.LIST
-    }
-  val galleryThumbnailSize: Flow<GalleryThumbnailSize> =
-    context.settingsDataStore.data.map { preferences ->
-      preferences[GALLERY_THUMBNAIL_SIZE]?.let(GalleryThumbnailSize::valueOf) ?: GalleryThumbnailSize.MEDIUM
-    }
-  val galleryImageScale: Flow<GalleryImageScale> =
-    context.settingsDataStore.data.map { preferences ->
-      preferences[GALLERY_IMAGE_SCALE]?.let(GalleryImageScale::valueOf) ?: GalleryImageScale.FIT
-    }
-  val filePreviewEnabled: Flow<Boolean> =
-    context.settingsDataStore.data.map { it[FILE_PREVIEW_ENABLED] ?: true }
-  val presignedUrlExpiryMinutes: Flow<Int> =
-    context.settingsDataStore.data.map { it[PRESIGNED_URL_EXPIRY_MINUTES] ?: DEFAULT_PRESIGNED_URL_EXPIRY_MINUTES }
-  val allowRecursiveFolderDelete: Flow<Boolean> =
-    context.settingsDataStore.data.map { it[ALLOW_RECURSIVE_FOLDER_DELETE] ?: false }
-  val advancedSettingsEnabled: Flow<Boolean> =
-    context.settingsDataStore.data.map { it[ADVANCED_SETTINGS_ENABLED] ?: false }
-
+  val settings: Flow<AppSettingsSnapshot> = context.settingsDataStore.data.map { preferences ->
+    AppSettingsSnapshot(
+      themeMode = preferences[THEME_MODE].enumOrDefault(ThemeMode.SYSTEM),
+      logLevel = preferences[LOG_LEVEL].enumOrDefault(LogLevel.ERRORS),
+      paletteMode = preferences[PALETTE_MODE].enumOrDefault(PaletteMode.DYNAMIC),
+      predictiveBack = preferences[PREDICTIVE_BACK] ?: false,
+      metadataTemplate = preferences[METADATA_TEMPLATE]?.let {
+        runCatching { json.decodeFromString<Map<String, String>>(it) }.getOrDefault(emptyMap())
+      }.orEmpty(),
+      objectSort = preferences[OBJECT_SORT].enumOrDefault(ObjectSortMode.NAME),
+      objectSortAscending = preferences[OBJECT_SORT_ASCENDING] ?: true,
+      objectViewMode = preferences[OBJECT_VIEW_MODE].enumOrDefault(ObjectViewMode.LIST),
+      galleryThumbnailSize = preferences[GALLERY_THUMBNAIL_SIZE].enumOrDefault(GalleryThumbnailSize.MEDIUM),
+      galleryImageScale = preferences[GALLERY_IMAGE_SCALE].enumOrDefault(GalleryImageScale.FIT),
+      filePreviewEnabled = preferences[FILE_PREVIEW_ENABLED] ?: true,
+      presignedUrlExpiryMinutes = preferences[PRESIGNED_URL_EXPIRY_MINUTES] ?: DEFAULT_PRESIGNED_URL_EXPIRY_MINUTES,
+      allowRecursiveFolderDelete = preferences[ALLOW_RECURSIVE_FOLDER_DELETE] ?: false,
+      advancedSettingsEnabled = preferences[ADVANCED_SETTINGS_ENABLED] ?: false,
+    )
+  }
   suspend fun setThemeMode(mode: ThemeMode) {
     context.settingsDataStore.edit { it[THEME_MODE] = mode.name }
   }
@@ -159,22 +134,8 @@ class SettingsRepository(private val context: Context) {
     context.settingsDataStore.edit { it[ADVANCED_SETTINGS_ENABLED] = enabled }
   }
 
-  suspend fun snapshot(languageTag: String): AppSettingsSnapshot = AppSettingsSnapshot(
-    themeMode = themeMode.first(),
-    logLevel = logLevel.first(),
-    paletteMode = paletteMode.first(),
-    predictiveBack = predictiveBack.first(),
-    metadataTemplate = metadataTemplate.first(),
-    objectSort = objectSort.first(),
-    objectSortAscending = objectSortAscending.first(),
-    objectViewMode = objectViewMode.first(),
-    galleryThumbnailSize = galleryThumbnailSize.first(),
-    galleryImageScale = galleryImageScale.first(),
-    filePreviewEnabled = filePreviewEnabled.first(),
-    presignedUrlExpiryMinutes = presignedUrlExpiryMinutes.first(),
-    allowRecursiveFolderDelete = allowRecursiveFolderDelete.first(),
-    languageTag = languageTag,
-  )
+  suspend fun snapshot(languageTag: String): AppSettingsSnapshot =
+    settings.first().copy(languageTag = languageTag)
 
   suspend fun restore(snapshot: AppSettingsSnapshot) {
     context.settingsDataStore.edit {
@@ -189,8 +150,9 @@ class SettingsRepository(private val context: Context) {
       it[GALLERY_THUMBNAIL_SIZE] = snapshot.galleryThumbnailSize.name
       it[GALLERY_IMAGE_SCALE] = snapshot.galleryImageScale.name
       it[FILE_PREVIEW_ENABLED] = snapshot.filePreviewEnabled
-      it[PRESIGNED_URL_EXPIRY_MINUTES] = snapshot.presignedUrlExpiryMinutes.coerceIn(1, MAX_PRESIGNED_URL_EXPIRY_MINUTES)
+      it[PRESIGNED_URL_EXPIRY_MINUTES] = snapshot.presignedUrlExpiryMinutes
       it[ALLOW_RECURSIVE_FOLDER_DELETE] = snapshot.allowRecursiveFolderDelete
+      it[ADVANCED_SETTINGS_ENABLED] = snapshot.advancedSettingsEnabled
     }
   }
 
@@ -230,5 +192,9 @@ data class AppSettingsSnapshot(
   val filePreviewEnabled: Boolean = true,
   val presignedUrlExpiryMinutes: Int = DEFAULT_PRESIGNED_URL_EXPIRY_MINUTES,
   val allowRecursiveFolderDelete: Boolean = false,
+  val advancedSettingsEnabled: Boolean = false,
   val languageTag: String = "",
 )
+
+internal inline fun <reified T : Enum<T>> String?.enumOrDefault(default: T): T =
+  this?.let { value -> enumValues<T>().firstOrNull { it.name == value } } ?: default

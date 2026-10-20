@@ -137,7 +137,7 @@ fun ProfilesScreen(
         title = stringResource(R.string.connect_storage),
         message = stringResource(R.string.connect_storage_description),
         padding = padding,
-        action = stringResource(R.string.add_r2_profile),
+        action = stringResource(R.string.add_profile),
         onAction = onAdd,
       )
     } else {

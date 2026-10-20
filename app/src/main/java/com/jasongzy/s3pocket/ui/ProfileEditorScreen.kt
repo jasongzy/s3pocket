@@ -1,9 +1,12 @@
 package com.jasongzy.s3pocket.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -24,11 +27,13 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -56,6 +61,7 @@ fun ProfileEditorScreen(
   val state by viewModel.state.collectAsStateWithLifecycle()
   var showSecret by remember { mutableStateOf(false) }
   var showManagementToken by remember { mutableStateOf(false) }
+  val context = LocalContext.current
   val uriHandler = LocalUriHandler.current
 
   Scaffold(
@@ -64,6 +70,20 @@ fun ProfileEditorScreen(
       TopAppBar(
         title = { Text(stringResource(if (profileId == null) R.string.add_profile else R.string.edit_profile)) },
         navigationIcon = { BackButton(onBack) },
+        actions = {
+          TooltipIconButton(
+            label = stringResource(R.string.save),
+            onClick = {
+              viewModel.save {
+                Toast.makeText(context, R.string.saved_successfully, Toast.LENGTH_SHORT).show()
+                onBack()
+              }
+            },
+            enabled = !state.isLoading && !state.isTesting,
+          ) {
+            AppIcon(R.drawable.ms_save_24, null)
+          }
+        },
       )
     }
   ) { padding ->
@@ -171,14 +191,55 @@ fun ProfileEditorScreen(
           Switch(checked = state.forcePathStyle, onCheckedChange = viewModel::updateForcePathStyle)
         }
       }
-      OutlinedTextField(
-        value = state.publicBaseUrl,
-        onValueChange = viewModel::updatePublicBaseUrl,
-        label = { Text(stringResource(R.string.public_base_url)) },
-        supportingText = { Text(stringResource(R.string.public_base_url_hint)) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-      )
+      Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          Text(stringResource(R.string.public_urls), style = MaterialTheme.typography.titleMedium)
+          Text(
+            stringResource(R.string.public_urls_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          state.publicUrls.forEach { entry ->
+            key(entry.id) {
+              if (entry.bucket.isBlank() && entry.baseUrl.isNotBlank()) {
+                Text(stringResource(R.string.public_url_needs_bucket), color = MaterialTheme.colorScheme.error)
+              }
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                  OutlinedTextField(
+                    value = entry.bucket,
+                    onValueChange = { viewModel.updatePublicUrl(entry.copy(bucket = it)) },
+                    label = { RequiredLabel(stringResource(R.string.public_bucket)) },
+                    singleLine = true,
+                    enabled = !state.isLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                  OutlinedTextField(
+                    value = entry.baseUrl,
+                    onValueChange = { viewModel.updatePublicUrl(entry.copy(baseUrl = it)) },
+                    label = { RequiredLabel(stringResource(R.string.public_base_url)) },
+                    placeholder = { Text(stringResource(R.string.public_base_url_hint)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    singleLine = true,
+                    enabled = !state.isLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                }
+                TooltipIconButton(
+                  stringResource(R.string.remove_public_url),
+                  { viewModel.removePublicUrl(entry.id) },
+                  enabled = !state.isLoading,
+                ) { AppIcon(R.drawable.ms_delete_24, null) }
+              }
+            }
+          }
+          TextButton(onClick = viewModel::addPublicUrl, enabled = !state.isLoading) {
+            AppIcon(R.drawable.ms_add_24, null, Modifier.size(18.dp))
+            Spacer(Modifier.size(8.dp))
+            Text(stringResource(R.string.add_public_url))
+          }
+        }
+      }
       OutlinedTextField(
         value = state.accessKeyId,
         onValueChange = viewModel::updateAccessKeyId,
@@ -223,7 +284,15 @@ fun ProfileEditorScreen(
         ) {
           Text(stringResource(if (state.isTesting) R.string.testing_connection else R.string.test_connection))
         }
-        Button(onClick = { viewModel.save(onSaved) }, enabled = !state.isLoading && !state.isTesting) {
+        Button(
+          onClick = {
+            viewModel.save {
+              Toast.makeText(context, R.string.saved_successfully, Toast.LENGTH_SHORT).show()
+              onSaved(it)
+            }
+          },
+          enabled = !state.isLoading && !state.isTesting,
+        ) {
           Text(stringResource(if (state.isLoading) R.string.saving else R.string.save_and_connect))
         }
       }

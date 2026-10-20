@@ -7,6 +7,7 @@ import com.jasongzy.s3pocket.data.CloudflareMetricsRepository
 import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.model.StorageProfile
 import com.jasongzy.s3pocket.data.model.StorageProvider
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -31,19 +32,27 @@ class ProfileInfoViewModel(
 ) : ViewModel() {
   private val _state = MutableStateFlow(ProfileInfoUiState())
   val state: StateFlow<ProfileInfoUiState> = _state
+  private var profileJob: Job? = null
+  private var metricsJob: Job? = null
 
-  init {
-    loadProfile()
-  }
-
-  private fun loadProfile() {
-    viewModelScope.launch {
+  fun loadProfile() {
+    profileJob?.cancel()
+    metricsJob?.cancel()
+    _state.update { it.copy(isProfileLoading = true, isMetricsLoading = false, profileError = null) }
+    profileJob = viewModelScope.launch {
       val profile = runSuspendCatching { profiles.get(profileId) }
         .getOrElse { error ->
-          _state.update { it.copy(isProfileLoading = false, profileError = error.userMessage()) }
+          _state.value = ProfileInfoUiState(isProfileLoading = false, profileError = error.userMessage())
           return@launch
         }
-      _state.update { it.copy(profile = profile, isProfileLoading = false) }
+      _state.update {
+        it.copy(
+          profile = profile,
+          isProfileLoading = false,
+          metrics = it.metrics.takeIf { _ -> it.profile == profile },
+          metricsError = null,
+        )
+      }
       if (profile.canLoadCloudflareMetrics()) {
         refreshMetrics()
       }
@@ -52,8 +61,8 @@ class ProfileInfoViewModel(
 
   fun refreshMetrics() {
     val profile = _state.value.profile?.takeIf(StorageProfile::canLoadCloudflareMetrics) ?: return
-    if (_state.value.isMetricsLoading) return
-    viewModelScope.launch {
+    if (_state.value.isMetricsLoading || _state.value.isProfileLoading) return
+    metricsJob = viewModelScope.launch {
       _state.update { it.copy(isMetricsLoading = true, metricsError = null) }
       runSuspendCatching { metricsRepository.fetch(profile) }
         .onSuccess { metrics ->

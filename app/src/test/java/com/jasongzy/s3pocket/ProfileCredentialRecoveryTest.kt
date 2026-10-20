@@ -24,7 +24,8 @@ class ProfileCredentialRecoveryTest {
       regionName = "ap-southeast-1",
       endpointUrl = "https://objects.example.com",
       forcePathStyle = true,
-      publicBaseUrl = "https://cdn.example.com",
+      publicBaseUrls = mapOf("public" to "https://cdn.example.com", "photos" to "https://images.example.com"),
+      unassignedPublicUrl = "https://unassigned.example.com",
     )
 
     val state = decodeStoredProfiles(
@@ -39,10 +40,20 @@ class ProfileCredentialRecoveryTest {
       assertEquals("access-key-id", accessKeyId)
       assertEquals("ap-southeast-1", regionName)
       assertEquals("https://objects.example.com", endpointUrl)
-      assertEquals("https://cdn.example.com", publicBaseUrl)
+      assertEquals(stored.publicBaseUrls, publicBaseUrls)
+      assertEquals(stored.unassignedPublicUrl, unassignedPublicUrl)
       assertTrue(forcePathStyle)
       assertTrue(secretAccessKey.isEmpty())
     }
+  }
+
+  @Test
+  fun storedPublicUrlMigratesWithoutChangingEncryptedCredentials() {
+    val stored = """[{"id":"id","name":"Storage","provider":"AWS_S3","accessKeyId":"key","secretAccessKey":"encrypted-secret","publicBaseUrl":"https://cdn.example.com/path"}]"""
+    val profile = decodeStoredProfiles(stored, PassingCredentialCodec, json).profiles.single()
+    assertEquals("https://cdn.example.com/path", profile.unassignedPublicUrl)
+    assertTrue(profile.publicBaseUrls.isEmpty())
+    assertEquals("encrypted-secret", profile.secretAccessKey)
   }
 
   @Test

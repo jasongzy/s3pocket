@@ -18,12 +18,13 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.IntentCompat
 import androidx.core.os.BundleCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.jasongzy.s3pocket.data.ThemeMode
+import androidx.lifecycle.lifecycleScope
 import com.jasongzy.s3pocket.data.AppLog
-import com.jasongzy.s3pocket.data.LogLevel
-import com.jasongzy.s3pocket.data.PaletteMode
+import com.jasongzy.s3pocket.data.ThemeMode
 import com.jasongzy.s3pocket.theme.S3PocketTheme
 import dev.hossain.highlight.ui.HighlightThemeProvider
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
   private var sharedUris by mutableStateOf(emptyList<Uri>())
@@ -39,24 +40,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     enableEdgeToEdge()
-    setContent {
-      val themeMode = container.settingsRepository.themeMode.collectAsStateWithLifecycle(ThemeMode.SYSTEM).value
-      val logLevel = container.settingsRepository.logLevel.collectAsStateWithLifecycle(LogLevel.ERRORS).value
-      val paletteMode = container.settingsRepository.paletteMode.collectAsStateWithLifecycle(PaletteMode.DYNAMIC).value
-      val predictiveBack = container.settingsRepository.predictiveBack.collectAsStateWithLifecycle(false).value
-      SideEffect { AppLog.level = logLevel }
-      val darkTheme =
-        when (themeMode) {
-          ThemeMode.SYSTEM -> isSystemInDarkTheme()
-          ThemeMode.LIGHT -> false
-          ThemeMode.DARK -> true
-        }
-      S3PocketTheme(darkTheme = darkTheme, paletteMode = paletteMode) {
-        HighlightThemeProvider(darkTheme = darkTheme) {
-          Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            MainNavigation(predictiveBack, sharedUris, openSharedImmediately) {
-              sharedUris = emptyList()
-              openSharedImmediately = false
+    lifecycleScope.launch {
+      val initialSettings = container.settingsRepository.settings.first()
+      AppLog.level = initialSettings.logLevel
+      setContent {
+        val settings = container.settingsRepository.settings.collectAsStateWithLifecycle(initialSettings).value
+        SideEffect { AppLog.level = settings.logLevel }
+        val darkTheme =
+          when (settings.themeMode) {
+            ThemeMode.SYSTEM -> isSystemInDarkTheme()
+            ThemeMode.LIGHT -> false
+            ThemeMode.DARK -> true
+          }
+        S3PocketTheme(darkTheme = darkTheme, paletteMode = settings.paletteMode) {
+          HighlightThemeProvider(darkTheme = darkTheme) {
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+              MainNavigation(settings, sharedUris, openSharedImmediately) {
+                sharedUris = emptyList()
+                openSharedImmediately = false
+              }
             }
           }
         }

@@ -77,6 +77,7 @@ import coil3.compose.AsyncImage
 import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.GalleryImageScale
 import com.jasongzy.s3pocket.data.GalleryThumbnailSize
+import com.jasongzy.s3pocket.data.AppSettingsSnapshot
 import com.jasongzy.s3pocket.data.ObjectSortMode
 import com.jasongzy.s3pocket.data.ObjectViewMode
 import com.jasongzy.s3pocket.data.ProfileRepository
@@ -123,6 +124,7 @@ fun ObjectsScreen(
   repository: ProfileRepository,
   storageFactory: StorageFactory,
   settingsRepository: SettingsRepository,
+  settings: AppSettingsSnapshot,
   transferManager: TransferManager,
   thumbnailUrls: ThumbnailUrlRepository,
   onBack: () -> Unit,
@@ -151,7 +153,7 @@ fun ObjectsScreen(
   }
   val state by viewModel.state.collectAsStateWithLifecycle()
   val favorites by viewModel.favorites.collectAsStateWithLifecycle()
-  val metadataTemplate by settingsRepository.metadataTemplate.collectAsStateWithLifecycle(emptyMap())
+  val metadataTemplate = settings.metadataTemplate
   var selected by remember { mutableStateOf<SelectedDocument?>(null) }
   var sharedDocuments by remember { mutableStateOf<List<SelectedDocument>?>(null) }
   var selectionError by remember { mutableStateOf<String?>(null) }
@@ -162,11 +164,11 @@ fun ObjectsScreen(
   var movingItems by remember { mutableStateOf<List<ObjectItem>?>(null) }
   var pendingUpload by remember { mutableStateOf<PendingUpload?>(null) }
   var pendingBatchUpload by remember { mutableStateOf<PendingBatchUpload?>(null) }
-  val sort by settingsRepository.objectSort.collectAsStateWithLifecycle(ObjectSortMode.NAME)
-  val ascending by settingsRepository.objectSortAscending.collectAsStateWithLifecycle(true)
-  val viewMode by settingsRepository.objectViewMode.collectAsStateWithLifecycle(ObjectViewMode.LIST)
-  val galleryThumbnailSize by settingsRepository.galleryThumbnailSize.collectAsStateWithLifecycle(GalleryThumbnailSize.MEDIUM)
-  val galleryImageScale by settingsRepository.galleryImageScale.collectAsStateWithLifecycle(GalleryImageScale.FIT)
+  val sort = settings.objectSort
+  val ascending = settings.objectSortAscending
+  val viewMode = settings.objectViewMode
+  val galleryThumbnailSize = settings.galleryThumbnailSize
+  val galleryImageScale = settings.galleryImageScale
   var showMore by remember { mutableStateOf(false) }
   var showGalleryOptions by remember { mutableStateOf(false) }
   var showUploadSources by remember { mutableStateOf(false) }

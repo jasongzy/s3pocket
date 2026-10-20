@@ -16,25 +16,24 @@ interface CredentialCodec {
 }
 
 class CredentialCipher : CredentialCodec {
-  private val key: SecretKey
-    get() {
-      val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-      val existing = keyStore.getKey(KEY_ALIAS, null) as? SecretKey
-      if (existing != null) return existing
+  private val key: SecretKey by lazy {
+    val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+    val existing = keyStore.getKey(KEY_ALIAS, null) as? SecretKey
+    if (existing != null) return@lazy existing
 
-      val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
-      generator.init(
-        KeyGenParameterSpec.Builder(
-            KEY_ALIAS,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-          )
-          .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-          .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-          .setKeySize(256)
-          .build()
-      )
-      return generator.generateKey()
-    }
+    val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
+    generator.init(
+      KeyGenParameterSpec.Builder(
+          KEY_ALIAS,
+          KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+        .setKeySize(256)
+        .build()
+    )
+    generator.generateKey()
+  }
 
   override fun encrypt(value: String): String {
     val cipher = Cipher.getInstance(TRANSFORMATION)

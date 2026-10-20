@@ -7,11 +7,20 @@ import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.model.StorageProfile
 import com.jasongzy.s3pocket.data.model.StorageProvider
+import com.jasongzy.s3pocket.data.model.ProfileError
 import com.jasongzy.s3pocket.data.storage.StorageFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import java.util.UUID
+
+data class PublicUrlEntry(
+  val bucket: String = "",
+  val baseUrl: String = "",
+  val id: String = UUID.randomUUID().toString(),
+)
 
 data class ProfileFormState(
   val id: String = "",
@@ -24,40 +33,63 @@ data class ProfileFormState(
   val region: String = "",
   val endpoint: String = "",
   val forcePathStyle: Boolean = false,
-  val publicBaseUrl: String = "",
+  val publicUrls: List<PublicUrlEntry> = emptyList(),
   val isLoading: Boolean = false,
   val isTesting: Boolean = false,
   val testSucceeded: Boolean = false,
   @param:StringRes val errorRes: Int? = null,
   val errorDetail: String? = null,
-)
+) {
+  fun validationError(checkName: Boolean = true): ProfileError? =
+    if (publicUrls.map { it.bucket }.distinct().size != publicUrls.size) ProfileError.DUPLICATE_PUBLIC_BUCKET
+    else toProfile().validationError(checkName)
+
+  fun toProfile() = StorageProfile(
+    id = id,
+    name = name.trim(),
+    provider = provider,
+    accountId = accountId.takeIf { provider == StorageProvider.CLOUDFLARE_R2 }.orEmpty(),
+    accessKeyId = accessKeyId,
+    secretAccessKey = secretAccessKey,
+    managementApiToken = managementApiToken.takeIf { provider == StorageProvider.CLOUDFLARE_R2 }.orEmpty(),
+    regionName = region.takeIf { provider == StorageProvider.AWS_S3 }.orEmpty(),
+    endpointUrl = endpoint.takeIf { provider == StorageProvider.AWS_S3 }.orEmpty(),
+    forcePathStyle = provider == StorageProvider.AWS_S3 && forcePathStyle,
+    publicBaseUrls = publicUrls.associate { it.bucket to it.baseUrl },
+  )
+}
 
 class ProfileEditorViewModel(
   private val profileId: String?,
   private val repository: ProfileRepository,
   private val storageFactory: StorageFactory,
 ) : ViewModel() {
-  private val _state = MutableStateFlow(ProfileFormState())
+  private val _state = MutableStateFlow(ProfileFormState(id = profileId.orEmpty(), isLoading = profileId != null))
   val state: StateFlow<ProfileFormState> = _state
+  private var testJob: Job? = null
 
   init {
     if (profileId != null) {
       viewModelScope.launch {
-        val profile = repository.find(profileId) ?: return@launch
-        _state.value =
-          ProfileFormState(
-            id = profile.id,
-            name = profile.name,
-            accountId = profile.accountId,
-            provider = profile.provider,
-            accessKeyId = profile.accessKeyId,
-            secretAccessKey = profile.secretAccessKey,
-            managementApiToken = profile.managementApiToken,
-            region = profile.regionName,
-            endpoint = profile.endpointUrl,
-            forcePathStyle = profile.forcePathStyle,
-            publicBaseUrl = profile.publicBaseUrl,
-          )
+        runSuspendCatching { requireNotNull(repository.find(profileId)) { "Profile not found" } }
+          .onSuccess { profile ->
+            _state.value =
+              ProfileFormState(
+                id = profile.id,
+                name = profile.name,
+                accountId = profile.accountId,
+                provider = profile.provider,
+                accessKeyId = profile.accessKeyId,
+                secretAccessKey = profile.secretAccessKey,
+                managementApiToken = profile.managementApiToken,
+                region = profile.regionName,
+                endpoint = profile.endpointUrl,
+                forcePathStyle = profile.forcePathStyle,
+                publicUrls = profile.publicBaseUrls.map { (bucket, url) -> PublicUrlEntry(bucket, url) } +
+                  listOfNotNull(profile.unassignedPublicUrl.takeIf(String::isNotEmpty)?.let { PublicUrlEntry(baseUrl = it) }),
+              )
+          }
+          .onFailure { error -> _state.update { it.copy(isLoading = false, errorDetail = error.userMessage()) } }
       }
     }
   }
@@ -80,16 +112,25 @@ class ProfileEditorViewModel(
 
   fun updateForcePathStyle(value: Boolean) = update { it.copy(forcePathStyle = value) }
 
-  fun updatePublicBaseUrl(value: String) = update { it.copy(publicBaseUrl = value.trim()) }
+  fun addPublicUrl() = update { it.copy(publicUrls = it.publicUrls + PublicUrlEntry()) }
+
+  fun removePublicUrl(id: String) = update { it.copy(publicUrls = it.publicUrls.filterNot { entry -> entry.id == id }) }
+
+  fun updatePublicUrl(entry: PublicUrlEntry) = update {
+    it.copy(publicUrls = it.publicUrls.map { current ->
+      if (current.id == entry.id) entry.copy(bucket = entry.bucket.trim(), baseUrl = entry.baseUrl.trim()) else current
+    })
+  }
 
   fun testConnection() {
+    if (state.value.isLoading || state.value.isTesting) return
     val form = state.value
-    val errorRes = validateConnection(form)
+    val errorRes = validate(form, checkName = false)
     if (errorRes != null) {
       _state.update { it.copy(errorRes = errorRes) }
       return
     }
-    viewModelScope.launch {
+    testJob = viewModelScope.launch {
       _state.update { it.copy(isTesting = true, testSucceeded = false, errorRes = null, errorDetail = null) }
       runSuspendCatching { storageFactory.create(form.toProfile()).listBuckets() }
         .onSuccess { _state.update { it.copy(isTesting = false, testSucceeded = true) } }
@@ -98,6 +139,7 @@ class ProfileEditorViewModel(
   }
 
   fun save(onSaved: (String) -> Unit) {
+    if (state.value.isLoading || state.value.isTesting) return
     val form = state.value
     val errorRes = validate(form)
     if (errorRes != null) {
@@ -115,36 +157,23 @@ class ProfileEditorViewModel(
   }
 
   @StringRes
-  private fun validate(form: ProfileFormState): Int? = when {
-    form.name.isBlank() -> R.string.error_profile_name
-    else -> validateConnection(form)
-  }
-
-  @StringRes
-  private fun validateConnection(form: ProfileFormState): Int? = when {
-    form.provider == StorageProvider.CLOUDFLARE_R2 && !form.accountId.matches(Regex("[a-fA-F0-9]{32}")) -> R.string.error_account_id
-    form.provider == StorageProvider.AWS_S3 && form.region.isBlank() -> R.string.error_region
-    form.accessKeyId.isBlank() -> R.string.error_access_key
-    form.secretAccessKey.isBlank() -> R.string.error_secret_key
-    else -> null
+  private fun validate(form: ProfileFormState, checkName: Boolean = true): Int? =
+    when (form.validationError(checkName)) {
+      ProfileError.NAME -> R.string.error_profile_name
+      ProfileError.ACCOUNT_ID -> R.string.error_account_id
+      ProfileError.REGION -> R.string.error_region
+      ProfileError.ACCESS_KEY -> R.string.error_access_key
+      ProfileError.SECRET_KEY -> R.string.error_secret_key
+      ProfileError.ENDPOINT -> R.string.error_endpoint_url
+      ProfileError.PUBLIC_URL -> R.string.error_public_url
+      ProfileError.PUBLIC_BUCKET -> R.string.error_public_bucket
+      ProfileError.DUPLICATE_PUBLIC_BUCKET -> R.string.error_duplicate_public_bucket
+      null -> null
   }
 
   private fun update(transform: (ProfileFormState) -> ProfileFormState) {
-    _state.update { transform(it).copy(testSucceeded = false, errorRes = null, errorDetail = null) }
+    if (state.value.isLoading) return
+    testJob?.cancel()
+    _state.update { transform(it).copy(isTesting = false, testSucceeded = false, errorRes = null, errorDetail = null) }
   }
-
-  private fun ProfileFormState.toProfile() =
-    StorageProfile(
-      id = id,
-      name = name.trim(),
-      provider = provider,
-      accountId = accountId,
-      accessKeyId = accessKeyId,
-      secretAccessKey = secretAccessKey,
-      managementApiToken = managementApiToken,
-      regionName = region,
-      endpointUrl = endpoint,
-      forcePathStyle = forcePathStyle,
-      publicBaseUrl = publicBaseUrl,
-    )
 }

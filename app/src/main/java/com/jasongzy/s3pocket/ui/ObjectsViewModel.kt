@@ -335,7 +335,7 @@ class ObjectsViewModel(
           val storage = createStorage()
           val plan = buildDeletePlan(storage, items)
           if (plan.hasNonEmptyFolder) {
-            require(settings.allowRecursiveFolderDelete.first()) { "Recursive folder deletion is disabled" }
+            require(settings.settings.first().allowRecursiveFolderDelete) { "Recursive folder deletion is disabled" }
             _state.update { it.copy(isWorking = false, isDeleting = false, pendingRecursiveDelete = items) }
           } else {
             deletePlan(storage, items, plan)
@@ -365,7 +365,7 @@ class ObjectsViewModel(
         )
       }
       runSuspendCatching {
-          require(settings.allowRecursiveFolderDelete.first()) { "Recursive folder deletion is disabled" }
+          require(settings.settings.first().allowRecursiveFolderDelete) { "Recursive folder deletion is disabled" }
           val storage = createStorage()
           deletePlan(storage, items, buildDeletePlan(storage, items))
         }

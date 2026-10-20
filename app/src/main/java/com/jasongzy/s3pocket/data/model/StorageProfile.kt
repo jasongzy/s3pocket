@@ -14,7 +14,8 @@ data class StorageProfile(
   val regionName: String = "",
   val endpointUrl: String = "",
   val forcePathStyle: Boolean = false,
-  val publicBaseUrl: String = "",
+  val publicBaseUrls: Map<String, String> = emptyMap(),
+  val unassignedPublicUrl: String = "",
 ) {
   val isAmazonS3: Boolean
     get() = provider == StorageProvider.AWS_S3 && isAmazonS3Endpoint(endpointUrl)
@@ -37,9 +38,33 @@ data class StorageProfile(
       StorageProvider.AWS_S3 -> endpointUrl.trim().ifBlank { null }
     }
 
-  fun publicObjectUrl(key: String): String? =
-    publicBaseUrl.trim().trimEnd('/').takeIf { it.isNotEmpty() }?.let { "$it/${key.encodeUrlPath()}" }
+  fun publicObjectUrl(bucket: String, key: String): String? =
+    publicBaseUrls[bucket]?.trim()?.trimEnd('/')?.takeIf(String::isNotEmpty)
+      ?.let { "$it/${key.encodeUrlPath()}" }
+
+  fun validationError(checkName: Boolean = true): ProfileError? = when {
+    checkName && name.isBlank() -> ProfileError.NAME
+    provider == StorageProvider.CLOUDFLARE_R2 && !accountId.matches(Regex("[a-fA-F0-9]{32}")) -> ProfileError.ACCOUNT_ID
+    provider == StorageProvider.AWS_S3 && regionName.isBlank() -> ProfileError.REGION
+    accessKeyId.isBlank() -> ProfileError.ACCESS_KEY
+    secretAccessKey.isBlank() -> ProfileError.SECRET_KEY
+    endpointUrl.isNotBlank() && !endpointUrl.isHttpsBaseUrl() -> ProfileError.ENDPOINT
+    publicBaseUrls.keys.any { !it.isBucketName() || it != it.trim() } -> ProfileError.PUBLIC_BUCKET
+    publicBaseUrls.values.any { !it.isHttpsBaseUrl() } -> ProfileError.PUBLIC_URL
+    unassignedPublicUrl.isNotEmpty() && !unassignedPublicUrl.isHttpsBaseUrl() -> ProfileError.PUBLIC_URL
+    else -> null
+  }
 }
+
+enum class ProfileError { NAME, ACCOUNT_ID, REGION, ACCESS_KEY, SECRET_KEY, ENDPOINT, PUBLIC_URL, PUBLIC_BUCKET, DUPLICATE_PUBLIC_BUCKET }
+
+internal fun String.isBucketName(): Boolean = isNotBlank() && '/' !in this && none(Char::isISOControl)
+
+private fun String.isHttpsBaseUrl(): Boolean = runCatching {
+  val uri = java.net.URI(this)
+  uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank() &&
+    uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null
+}.getOrDefault(false)
 
 fun isAmazonS3Endpoint(endpointUrl: String): Boolean {
   if (endpointUrl.isBlank()) return true

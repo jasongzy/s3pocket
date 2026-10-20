@@ -99,9 +99,10 @@ class ObjectDetailsViewModel(
           val profile = profiles.get(profileId)
           val storage = storageFactory.create(profile)
           val details = storage.getObjectDetails(bucket, currentKey)
-          val previewEnabled = settings.filePreviewEnabled.first()
-          val expiryMinutes = settings.presignedUrlExpiryMinutes.first()
-          val publicUrl = profile.publicObjectUrl(currentKey)
+          val appSettings = settings.settings.first()
+          val previewEnabled = appSettings.filePreviewEnabled
+          val expiryMinutes = appSettings.presignedUrlExpiryMinutes
+          val publicUrl = profile.publicObjectUrl(bucket, currentKey)
           val accessUrl = publicUrl ?: storage.createPreviewUrl(bucket, currentKey, expiryMinutes)
           val textPreview = if (previewEnabled && details.isText() && details.size <= TEXT_PREVIEW_MAX_BYTES) {
             withContext(Dispatchers.IO) {
@@ -151,7 +152,7 @@ class ObjectDetailsViewModel(
       _state.update { it.copy(isRefreshingUrl = true, error = null) }
       runSuspendCatching {
           val profile = profiles.get(profileId)
-          val expiryMinutes = settings.presignedUrlExpiryMinutes.first()
+          val expiryMinutes = settings.settings.first().presignedUrlExpiryMinutes
           storageFactory.create(profile).createPreviewUrl(bucket, currentKey, expiryMinutes) to expiryMinutes
         }
         .onSuccess { (url, expiryMinutes) ->

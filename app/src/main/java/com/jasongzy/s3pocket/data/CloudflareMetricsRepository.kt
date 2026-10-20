@@ -44,7 +44,7 @@ class CloudflareMetricsRepository(private val client: OkHttpClient = OkHttpClien
     CloudflareMetrics(storageBytes, objectCount, operations.first, operations.second)
   }
 
-  private fun fetchOperations(profile: StorageProfile): Pair<Long, Long> {
+  private suspend fun fetchOperations(profile: StorageProfile): Pair<Long, Long> {
     val now = Instant.now()
     val start = now.atZone(ZoneOffset.UTC).withDayOfMonth(1).toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
     val body = buildJsonObject {
@@ -81,11 +81,11 @@ class CloudflareMetricsRepository(private val client: OkHttpClient = OkHttpClien
     return classA to classB
   }
 
-  private fun get(url: String, token: String): String = execute(
+  private suspend fun get(url: String, token: String): String = execute(
     Request.Builder().url(url).header("Authorization", "Bearer $token").get().build()
   )
 
-  private fun execute(request: Request): String = client.newCall(request).execute().use { response ->
+  private suspend fun execute(request: Request): String = client.newCall(request).useResponse { response ->
     val body = response.body.string()
     if (!response.isSuccessful) throw IOException("Cloudflare API failed (${response.code}): ${body.take(500)}")
     body

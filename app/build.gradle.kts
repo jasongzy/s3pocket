@@ -1,4 +1,23 @@
+import java.io.File
 import java.util.Properties
+import org.gradle.api.DefaultTask
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.TaskAction
+
+abstract class ValidateReleaseSigningTask : DefaultTask() {
+  @get:Input
+  abstract val configured: Property<Boolean>
+
+  @get:Input
+  abstract val storePath: Property<String>
+
+  @TaskAction
+  fun validate() {
+    require(configured.get()) { "Release signing properties are incomplete" }
+    require(File(storePath.get()).isFile) { "Release keystore does not exist" }
+  }
+}
 
 plugins {
   alias(libs.plugins.android.application)
@@ -22,10 +41,15 @@ val releaseKeyAlias = signingProperty("keyAlias", "RELEASE_KEY_ALIAS")
 val releaseKeyPassword = signingProperty("keyPassword", "RELEASE_KEY_PASSWORD")
 val hasReleaseSigning =
   listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
+val validateReleaseSigning = tasks.register<ValidateReleaseSigningTask>("validateReleaseSigning") {
+  configured.set(hasReleaseSigning)
+  storePath.set(releaseStoreFile?.let { file(it).absolutePath }.orEmpty())
+}
 
 android {
     namespace = "com.jasongzy.s3pocket"
-    compileSdk = 37
+    compileSdk { version = release(37) { minorApiLevel = 2 } }
+    buildToolsVersion = "37.0.0"
     defaultConfig {
         applicationId = "com.jasongzy.s3pocket"
         minSdk = 24
@@ -117,4 +141,8 @@ dependencies {
   implementation(libs.androidx.navigation3.ui)
   implementation(libs.androidx.navigation3.runtime)
   implementation(libs.androidx.lifecycle.viewmodel.navigation3)
+}
+
+tasks.configureEach {
+  if (name == "preReleaseBuild") dependsOn(validateReleaseSigning)
 }

@@ -13,7 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.annotation.DrawableRes
 import com.jasongzy.s3pocket.R
@@ -43,6 +45,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+// Material Symbols Outlined: 24dp, weight 400, grade 0; filled star for selection.
+// https://github.com/google/material-design-icons/tree/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/android
 @Composable
 fun AppIcon(
   @DrawableRes resourceId: Int,
@@ -124,7 +128,7 @@ fun TooltipIconButton(
     tooltip = { PlainTooltip { Text(label) } },
     state = rememberTooltipState(),
   ) {
-    IconButton(onClick = onClick, modifier = modifier, enabled = enabled) { content() }
+    IconButton(onClick = onClick, modifier = modifier.semantics { contentDescription = label }, enabled = enabled) { content() }
   }
 }
 
@@ -138,7 +142,7 @@ fun LoadingPane(padding: PaddingValues) {
     verticalArrangement = Arrangement.Center,
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
-    CircularProgressIndicator()
+    CircularWavyProgressIndicator()
   }
 }
 

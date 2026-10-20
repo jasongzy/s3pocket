@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -247,8 +248,10 @@ fun SettingsScreen(
                 Text(stringResource(R.string.import_profiles))
               }
             }
-            if (backup.error != null) {
-              Text(backup.error.orEmpty(), modifier = Modifier.padding(top = 10.dp), color = MaterialTheme.colorScheme.error)
+            backup.error?.let { error ->
+              SelectionContainer(modifier = Modifier.padding(top = 10.dp)) {
+                Text(error, color = MaterialTheme.colorScheme.error)
+              }
             }
           }
         }
@@ -304,7 +307,7 @@ fun SettingsScreen(
           ) {
             Text(stringResource(R.string.version), modifier = Modifier.weight(1f))
             Text(
-              BuildConfig.VERSION_NAME,
+              "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

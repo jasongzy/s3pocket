@@ -109,6 +109,7 @@ class ObjectsViewModel(
   @Volatile private var deleteCancelRequested = false
   @Volatile private var moveCancelRequested = false
   private var listingJob: Job? = null
+  private var loadedRevision: Long? = null
   private var completeListingRequired = false
   private val httpClient = OkHttpClient()
   private val stagingSession = transferManager.staging.openSession()
@@ -139,6 +140,10 @@ class ObjectsViewModel(
         }
       }
     }
+  }
+
+  fun refreshIfChanged() {
+    if (loadedRevision != storageFactory.revision(profileId, bucket)) refresh()
   }
 
   fun refresh() {
@@ -174,6 +179,7 @@ class ObjectsViewModel(
     listingJob = viewModelScope.launch {
       _state.update { it.copy(isLoadingAll = completeListingRequired) }
       runSuspendCatching {
+        val revision = storageFactory.revision(profileId, bucket)
         val storage = createStorage()
         var replace = refresh
         loadObjectPages(
@@ -181,6 +187,7 @@ class ObjectsViewModel(
           loadAll = { completeListingRequired },
           load = { storage.listObjects(bucket, prefix, it) },
         ) { page ->
+          if (replace) loadedRevision = revision
           _state.update {
             it.copy(
               objects = if (replace) page.items else (it.objects + page.items).distinctBy(ObjectItem::key),

@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -75,8 +76,8 @@ fun ProfilesScreen(
   viewModel: ProfilesViewModel = viewModel { ProfilesViewModel(repository) },
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
-  val profiles = state.profiles
-  val unavailableCredentialIds = state.unavailableCredentialIds
+  val profiles = state?.profiles.orEmpty()
+  val unavailableCredentialIds = state?.unavailableCredentialIds.orEmpty()
   val context = LocalContext.current
   val favorites by viewModel.favorites.collectAsStateWithLifecycle()
   var deleting by remember { mutableStateOf<StorageProfile?>(null) }
@@ -126,13 +127,14 @@ fun ProfilesScreen(
     floatingActionButton = {
       FloatingActionButton(
         onClick = onAdd,
-        modifier = Modifier.containerTransform(profileContainerKey(null)),
       ) {
         AppIcon(R.drawable.ms_add_24, stringResource(R.string.add_profile))
       }
     },
   ) { padding ->
-    if (profiles.isEmpty()) {
+    if (state == null) {
+      LoadingPane(padding)
+    } else if (profiles.isEmpty()) {
       MessagePane(
         title = stringResource(R.string.connect_storage),
         message = stringResource(R.string.connect_storage_description),
@@ -441,7 +443,6 @@ private fun ProfileCard(
     modifier = modifier
       .fillMaxWidth()
       .padding(horizontal = 16.dp)
-      .containerTransform(profileContainerKey(profile.id))
       .onGloballyPositioned { itemStride = it.size.height.toFloat() + itemSpacing }
       .graphicsLayer {
         scaleX = scale
@@ -451,29 +452,32 @@ private fun ProfileCard(
           isDragActive -> placementTranslation
           else -> 0f
         }
-      }
-      .combinedClickable(
-        onClick = onOpen,
-        onLongClick = {
-          haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-          onInfo()
-        },
-      ),
+      },
     elevation = CardDefaults.cardElevation(defaultElevation = elevation),
   ) {
     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      ProviderBadge(profile.provider, isAmazonS3 = profile.isAmazonS3)
-      Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-        Text(profile.name, style = MaterialTheme.typography.titleMedium)
-        Text(
-          stringResource(if (profile.provider == StorageProvider.CLOUDFLARE_R2) R.string.provider_cloudflare_r2 else R.string.provider_aws_s3),
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (!credentialsAvailable) {
+      Row(
+        modifier = Modifier.weight(1f).combinedClickable(
+          onClick = onOpen,
+          onLongClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            onInfo()
+          },
+        ),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        ProviderBadge(profile.provider, isAmazonS3 = profile.isAmazonS3)
+        Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
+          Text(profile.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
           Text(
-            stringResource(R.string.credentials_unavailable),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
+            stringResource(when {
+              !credentialsAvailable -> R.string.credentials_unavailable
+              profile.provider == StorageProvider.CLOUDFLARE_R2 -> R.string.provider_cloudflare_r2
+              else -> R.string.provider_aws_s3
+            }),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = if (credentialsAvailable) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
           )
         }
       }

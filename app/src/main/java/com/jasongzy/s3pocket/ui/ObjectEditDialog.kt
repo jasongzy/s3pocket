@@ -3,8 +3,11 @@ package com.jasongzy.s3pocket.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -21,9 +24,12 @@ import androidx.compose.ui.unit.dp
 import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.model.ObjectDetails
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ObjectEditDialog(
   details: ObjectDetails,
+  isSaving: Boolean,
+  error: String?,
   onDismiss: () -> Unit,
   onSave: (String, String?, String?, String?, Map<String, String>) -> Unit,
 ) {
@@ -38,15 +44,18 @@ fun ObjectEditDialog(
     }
   }
   AlertDialog(
-    onDismissRequest = onDismiss,
+    onDismissRequest = { if (!isSaving) onDismiss() },
     title = { Text(stringResource(R.string.edit_object)) },
     text = {
       LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (isSaving) item { LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth()) }
+        error?.let { item { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } } }
         item {
           OutlinedTextField(
             value = key,
             onValueChange = { key = it; errorRes = null },
             label = { Text(stringResource(R.string.object_key)) },
+            enabled = !isSaving,
             modifier = Modifier.fillMaxWidth(),
           )
         }
@@ -55,6 +64,7 @@ fun ObjectEditDialog(
             value = cacheControl,
             onValueChange = { cacheControl = it },
             label = { Text("Cache-Control") },
+            enabled = !isSaving,
             modifier = Modifier.fillMaxWidth(),
           )
         }
@@ -63,6 +73,7 @@ fun ObjectEditDialog(
             value = contentDisposition,
             onValueChange = { contentDisposition = it },
             label = { Text("Content-Disposition") },
+            enabled = !isSaving,
             modifier = Modifier.fillMaxWidth(),
           )
         }
@@ -71,11 +82,12 @@ fun ObjectEditDialog(
             value = contentType,
             onValueChange = { contentType = it },
             label = { Text(stringResource(R.string.content_type)) },
+            enabled = !isSaving,
             modifier = Modifier.fillMaxWidth(),
           )
         }
         item { Text(stringResource(R.string.custom_metadata), style = MaterialTheme.typography.titleSmall) }
-        metadataFields(metadata) { errorRes = null }
+        metadataFields(metadata, enabled = !isSaving) { errorRes = null }
         errorRes?.let { item { Text(stringResource(it), color = MaterialTheme.colorScheme.error) } }
       }
     },
@@ -93,11 +105,11 @@ fun ObjectEditDialog(
             values,
           )
         }
-      }) {
+      }, enabled = !isSaving) {
         AppIcon(R.drawable.ms_save_24, null)
         Text(stringResource(R.string.save))
       }
     },
-    dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    dismissButton = { TextButton(onClick = onDismiss, enabled = !isSaving) { Text(stringResource(R.string.cancel)) } },
   )
 }

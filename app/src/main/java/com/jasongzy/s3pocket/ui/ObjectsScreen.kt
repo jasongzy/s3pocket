@@ -33,12 +33,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.OutlinedTextField
@@ -148,7 +149,7 @@ fun ObjectsScreen(
     )
   }
   val state by viewModel.state.collectAsStateWithLifecycle()
-  LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
+  LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshIfChanged() }
   val stagingSession = remember(transferManager) { transferManager.staging.openSession() }
   DisposableEffect(stagingSession) {
     onDispose { stagingSession.close() }
@@ -480,10 +481,11 @@ fun ObjectsScreen(
             TooltipIconButton(
               label = stringResource(R.string.move),
               onClick = { movingItems = selectedItems },
+              enabled = !state.isWorking,
             ) {
               AppIcon(R.drawable.ms_drive_file_move_24, null)
             }
-            TooltipIconButton(stringResource(R.string.delete), { deletingItems = selectedItems }) {
+            TooltipIconButton(stringResource(R.string.delete), { deletingItems = selectedItems }, enabled = !state.isWorking) {
               AppIcon(R.drawable.ms_delete_24, null)
             }
           }
@@ -501,6 +503,7 @@ fun ObjectsScreen(
           DropdownMenuItem(
             text = { Text(stringResource(R.string.create_folder)) },
             onClick = { showUploadSources = false; createFolder = true },
+            enabled = !state.isWorking,
           )
           DropdownMenuItem(
             text = { Text(stringResource(R.string.upload_local_file)) },
@@ -557,9 +560,9 @@ fun ObjectsScreen(
           onCancel = viewModel::cancelMove,
         )
       } else if (state.isUploading || state.isWorking || state.isDownloadingSource || isScanningFolder) {
-        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
       } else if (state.showListingProgress) {
-        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
         Text(
           pluralStringResource(R.plurals.loading_items, state.objects.size, state.objects.size),
           modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
@@ -626,7 +629,7 @@ fun ObjectsScreen(
             if (state.nextContinuationToken != null && !state.isLoadingAll) {
               item(key = "load-more-${state.nextContinuationToken}") {
                 LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
               }
             }
             item { Spacer(Modifier.size(88.dp)) }
@@ -654,7 +657,7 @@ fun ObjectsScreen(
             if (state.nextContinuationToken != null && !state.isLoadingAll) {
               item(key = "load-more-${state.nextContinuationToken}") {
                 LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+                LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
               }
             }
             item { Spacer(Modifier.size(88.dp)) }
@@ -879,7 +882,7 @@ fun ObjectsScreen(
     AlertDialog(
       onDismissRequest = { job.cancel() },
       title = { Text(stringResource(R.string.preparing_upload)) },
-      text = { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) },
+      text = { LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth()) },
       confirmButton = {},
       dismissButton = {
         TextButton(onClick = { job.cancel() }) { Text(stringResource(R.string.cancel)) }
@@ -890,7 +893,7 @@ fun ObjectsScreen(
     AlertDialog(
       onDismissRequest = { selectionError = null },
       title = { Text(stringResource(R.string.cannot_use_file)) },
-      text = { Text(error) },
+      text = { SelectionContainer { Text(error) } },
       confirmButton = { TextButton(onClick = { selectionError = null }) { Text(stringResource(R.string.ok)) } },
     )
   }
@@ -900,7 +903,7 @@ fun ObjectsScreen(
       title = { Text(stringResource(R.string.uploading_files)) },
       text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-          LinearProgressIndicator(
+          LinearWavyProgressIndicator(
             progress = {
               if (progress.totalBytes > 0) progress.completedBytes.toFloat() / progress.totalBytes
               else progress.completed.toFloat() / progress.total
@@ -914,7 +917,7 @@ fun ObjectsScreen(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
-          progress.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+          progress.error?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } }
         }
       },
       confirmButton = {
@@ -939,9 +942,9 @@ private fun CancellableOperationProgress(
   onCancel: () -> Unit,
 ) {
   if (progress == null) {
-    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
   } else {
-    LinearProgressIndicator(
+    LinearWavyProgressIndicator(
       progress = { if (progress.total == 0) 1f else progress.completed.toFloat() / progress.total },
       modifier = Modifier.fillMaxWidth(),
     )
@@ -1035,7 +1038,7 @@ private fun TextInputDialog(
     onDismissRequest = onDismiss,
     title = { Text(title) },
     text = {
-      Column {
+      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         OutlinedTextField(value, { value = it }, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
         supportingText?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
       }

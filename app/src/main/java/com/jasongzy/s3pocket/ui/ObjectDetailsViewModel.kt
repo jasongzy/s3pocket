@@ -230,7 +230,8 @@ class ObjectDetailsViewModel(
         .onSuccess {
           val oldKey = currentKey
           currentKey = targetKey
-          if (oldKey == targetKey) load() else onSaved(targetKey)
+          if (oldKey == targetKey) load()
+          onSaved(targetKey)
         }
         .onFailure { error -> _state.update { it.copy(isLoading = false, error = error.userMessage()) } }
     }

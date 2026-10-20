@@ -17,7 +17,11 @@ internal data class MetadataEntry(val key: String = "", val value: String = "")
 internal fun uploadMetadata(template: Map<String, String>, sourceUrl: String?): Map<String, String> =
   if (sourceUrl == null) template else template.filterKeys { !it.equals("source-url", true) } + ("source-url" to sourceUrl)
 
-internal fun LazyListScope.metadataFields(entries: SnapshotStateList<MetadataEntry>, onChange: () -> Unit) {
+internal fun LazyListScope.metadataFields(
+  entries: SnapshotStateList<MetadataEntry>,
+  enabled: Boolean = true,
+  onChange: () -> Unit,
+) {
   items(entries.size) { index ->
     val entry = entries[index]
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -25,21 +29,23 @@ internal fun LazyListScope.metadataFields(entries: SnapshotStateList<MetadataEnt
         value = entry.key,
         onValueChange = { entries[index] = entry.copy(key = it); onChange() },
         label = { Text(stringResource(R.string.metadata_key)) },
+        enabled = enabled,
         modifier = Modifier.weight(1f),
       )
       OutlinedTextField(
         value = entry.value,
         onValueChange = { entries[index] = entry.copy(value = it); onChange() },
         label = { Text(stringResource(R.string.metadata_value)) },
+        enabled = enabled,
         modifier = Modifier.weight(1f),
       )
-      TooltipIconButton(stringResource(R.string.remove_metadata), { entries.removeAt(index); onChange() }) {
+      TooltipIconButton(stringResource(R.string.remove_metadata), { entries.removeAt(index); onChange() }, enabled = enabled) {
         AppIcon(R.drawable.ms_delete_24, null)
       }
     }
   }
   item {
-    TextButton(onClick = { entries += MetadataEntry(); onChange() }) {
+    TextButton(onClick = { entries += MetadataEntry(); onChange() }, enabled = enabled) {
       Text(stringResource(R.string.add_metadata))
     }
   }

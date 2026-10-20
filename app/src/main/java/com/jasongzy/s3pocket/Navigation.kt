@@ -1,16 +1,27 @@
 package com.jasongzy.s3pocket
 
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import android.net.Uri
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
@@ -22,7 +33,6 @@ import com.jasongzy.s3pocket.ui.ProfileEditorScreen
 import com.jasongzy.s3pocket.ui.ProfilesScreen
 import com.jasongzy.s3pocket.ui.SettingsScreen
 import com.jasongzy.s3pocket.ui.ProfileInfoScreen
-import com.jasongzy.s3pocket.ui.LocalSharedTransitionScope
 import com.jasongzy.s3pocket.data.model.FavoriteKind
 import com.jasongzy.s3pocket.data.AppSettingsSnapshot
 
@@ -37,26 +47,27 @@ fun MainNavigation(
   val backStack = rememberNavBackStack(ProfilesRoute)
   val application = LocalContext.current.applicationContext as S3PocketApplication
   val container = application.container
+  val editorOffset = with(LocalDensity.current) { 48.dp.roundToPx() } *
+    if (LocalLayoutDirection.current == LayoutDirection.Ltr) 1 else -1
   SideEffect { onUploadDestinationChanged(backStack.lastOrNull() is ObjectsRoute) }
 
-  SharedTransitionLayout {
-    CompositionLocalProvider(LocalSharedTransitionScope provides this) {
-      NavDisplay(
-        backStack = backStack,
-        onBack = { backStack.removeLastOrNull() },
-        transitionSpec = { fadeIn(tween(90)) togetherWith fadeOut(tween(90)) },
-        popTransitionSpec = { fadeIn(tween(90)) togetherWith fadeOut(tween(90)) },
-        predictivePopTransitionSpec = { _ ->
-          if (settings.predictiveBack) fadeIn(tween(90)) togetherWith fadeOut(tween(90))
-          else androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None
-        },
-        entryDecorators =
-          listOf(
-            rememberSaveableStateHolderNavEntryDecorator(),
-            rememberViewModelStoreNavEntryDecorator(),
-          ),
-        entryProvider =
-          entryProvider {
+  NavDisplay(
+    backStack = backStack,
+    modifier = Modifier.clipToBounds(),
+    onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
+    transitionSpec = { pageTransition(forward = true) },
+    popTransitionSpec = { pageTransition(forward = false) },
+    predictivePopTransitionSpec = { _ ->
+      if (settings.predictiveBack) pageTransition(forward = false)
+      else androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None
+    },
+    entryDecorators =
+      listOf(
+        rememberSaveableStateHolderNavEntryDecorator(),
+        rememberViewModelStoreNavEntryDecorator(),
+      ),
+    entryProvider =
+      entryProvider {
         entry<ProfilesRoute> {
           ProfilesScreen(
             repository = container.profileRepository,
@@ -75,22 +86,27 @@ fun MainNavigation(
             onSettings = { backStack.add(SettingsRoute) },
           )
         }
-        entry<SettingsRoute> {
+        entry<SettingsRoute> { route ->
           SettingsScreen(
             repository = container.settingsRepository,
             profiles = container.profileRepository,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { backStack.popIfCurrent(route) },
           )
         }
-        entry<ProfileEditorRoute> { route ->
+        entry<ProfileEditorRoute>(
+          metadata = NavDisplay.transitionSpec { editorTransition(editorOffset) } +
+            NavDisplay.popTransitionSpec { editorTransition(-editorOffset) } +
+            NavDisplay.predictivePopTransitionSpec { _ ->
+              if (settings.predictiveBack) editorTransition(-editorOffset) else null
+            },
+        ) { route ->
           ProfileEditorScreen(
             profileId = route.profileId,
             repository = container.profileRepository,
             storageFactory = container.storageFactory,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { backStack.popIfCurrent(route) },
             onSaved = { profileId ->
-              backStack.removeLastOrNull()
-              backStack.add(BucketsRoute(profileId))
+              if (backStack.popIfCurrent(route)) backStack.add(BucketsRoute(profileId))
             },
           )
         }
@@ -99,7 +115,7 @@ fun MainNavigation(
             profileId = route.profileId,
             profiles = container.profileRepository,
             metricsRepository = container.cloudflareMetricsRepository,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { backStack.popIfCurrent(route) },
             onEdit = { backStack.add(ProfileEditorRoute(route.profileId)) },
           )
         }
@@ -108,7 +124,7 @@ fun MainNavigation(
             profileId = route.profileId,
             repository = container.profileRepository,
             storageFactory = container.storageFactory,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { backStack.popIfCurrent(route) },
             onOpenBucket = { backStack.add(ObjectsRoute(route.profileId, it)) },
           )
         }
@@ -123,7 +139,7 @@ fun MainNavigation(
             settings = settings,
             transferManager = container.transferManager,
             thumbnailUrls = container.thumbnailUrls,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { backStack.popIfCurrent(route) },
             onOpenFolder = { backStack.add(ObjectsRoute(route.profileId, route.bucket, it)) },
             onOpenObject = { backStack.add(ObjectDetailsRoute(route.profileId, route.bucket, it)) },
             onNavigateToPrefix = { targetPrefix ->
@@ -152,15 +168,37 @@ fun MainNavigation(
             settingsRepository = container.settingsRepository,
             storageFactory = container.storageFactory,
             transferManager = container.transferManager,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { backStack.popIfCurrent(route) },
             onRenamed = { newKey ->
-              backStack.removeLastOrNull()
-              backStack.add(ObjectDetailsRoute(route.profileId, route.bucket, newKey))
+              if (backStack.popIfCurrent(route)) {
+                backStack.add(ObjectDetailsRoute(route.profileId, route.bucket, newKey))
+              }
             },
           )
         }
-          },
-      )
-    }
-  }
+      },
+  )
+}
+
+internal fun MutableList<NavKey>.popIfCurrent(route: NavKey): Boolean {
+  if (size <= 1 || last() != route) return false
+  removeAt(lastIndex)
+  return true
+}
+
+private fun editorTransition(offset: Int): ContentTransform =
+  (slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { offset } +
+    fadeIn(tween(180, delayMillis = 70))) togetherWith
+    (slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { -offset } +
+      fadeOut(tween(90)))
+
+private fun pageTransition(forward: Boolean): ContentTransform {
+  val direction = if (forward) 1 else -1
+  return slideInHorizontally(
+    animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow),
+    initialOffsetX = { it * direction },
+  ) togetherWith slideOutHorizontally(
+    animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow),
+    targetOffsetX = { -it * direction },
+  )
 }

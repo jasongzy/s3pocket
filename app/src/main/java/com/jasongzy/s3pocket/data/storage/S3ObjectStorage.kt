@@ -64,6 +64,7 @@ class S3ObjectStorage(
   private val httpClient: OkHttpClient,
   private val regionResolver: BucketRegionResolver,
   private val capabilities: StorageCapabilityCache,
+  private val onObjectsChanged: (String) -> Unit,
 ) : ObjectStorage {
   private val sdkHttpClient = httpClient.newBuilder()
     .followRedirects(false)
@@ -182,7 +183,7 @@ class S3ObjectStorage(
     val body = progressRequestBody(request.contentType, request.contentLength, source::open, shouldCancel, onProgress)
     val builder = Request.Builder().url(signed.url.toString()).put(body)
     signed.headers.forEach { key, values -> builder.header(key, values.joinToString(", ")) }
-    withContext(Dispatchers.IO) { execute(builder.build()) { } }
+    withContext(Dispatchers.IO) { execute(builder.build()) { onObjectsChanged(bucket) } }
   }
 
   override suspend fun download(
@@ -275,6 +276,7 @@ class S3ObjectStorage(
         multipartUpload = CompletedMultipartUpload { this.parts = parts }
         ifNoneMatch = "*".takeUnless { request.overwrite }
       }
+      onObjectsChanged(bucket)
     } catch (error: Throwable) {
       withContext(NonCancellable) {
         runCatching {
@@ -495,8 +497,12 @@ class S3ObjectStorage(
       }
     }
     check(!copied.copyObjectResult?.eTag.isNullOrBlank()) { "S3 did not confirm the copied object" }
-    if (renamed) {
-      deleteObject { this.bucket = bucket; key = move.sourceKey; ifMatch = etag }
+    try {
+      if (renamed) {
+        deleteObject { this.bucket = bucket; key = move.sourceKey; ifMatch = etag }
+      }
+    } finally {
+      onObjectsChanged(bucket)
     }
   }
 
@@ -510,7 +516,9 @@ class S3ObjectStorage(
     }
     val errors = response.errors.orEmpty()
     val failedKeys = errors.mapTo(mutableSetOf()) { it.key }
-    onDeleted(keys.filterNot { it in failedKeys })
+    val deleted = keys.filterNot { it in failedKeys }
+    if (deleted.isNotEmpty()) onObjectsChanged(bucket)
+    onDeleted(deleted)
     require(errors.isEmpty()) { errors.joinToString { "${it.key}: ${it.code}: ${it.message}" } }
   }
 

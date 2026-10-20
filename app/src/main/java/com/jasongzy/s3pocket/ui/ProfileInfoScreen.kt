@@ -15,7 +15,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -114,7 +114,7 @@ fun ProfileInfoScreen(
                   modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
                   contentAlignment = Alignment.Center,
                 ) {
-                  CircularProgressIndicator()
+                  CircularWavyProgressIndicator()
                 }
               }
               state.metrics?.let { metrics ->

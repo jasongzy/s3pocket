@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -65,7 +66,6 @@ fun ProfileEditorScreen(
   val uriHandler = LocalUriHandler.current
 
   Scaffold(
-    modifier = Modifier.containerTransform(profileContainerKey(profileId)),
     topBar = {
       TopAppBar(
         title = { Text(stringResource(if (profileId == null) R.string.add_profile else R.string.edit_profile)) },
@@ -270,7 +270,7 @@ fun ProfileEditorScreen(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
       state.errorRes?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
-      state.errorDetail?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+      state.errorDetail?.let { SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) } }
       if (state.testSucceeded) {
         Text(stringResource(R.string.connection_test_succeeded), color = MaterialTheme.colorScheme.primary)
       }

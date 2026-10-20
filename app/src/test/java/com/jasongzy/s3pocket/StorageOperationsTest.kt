@@ -118,6 +118,40 @@ class StorageOperationsTest {
   }
 
   @Test
+  fun browsingAndRejectedUploadsKeepListingsUnchanged() {
+    val changedBuckets = mutableListOf<String>()
+    var rejectUpload = true
+    withStorage({ exchange ->
+      when (exchange.requestMethod) {
+        "GET" -> exchange.respond(if (exchange.requestURI.query.orEmpty().contains("list-type")) "<ListBucketResult/>" else "file")
+        "HEAD" -> {
+          exchange.responseHeaders.add("ETag", "\"source\"")
+          exchange.sendResponseHeaders(200, -1)
+          exchange.close()
+        }
+        "PUT" -> {
+          if (rejectUpload) exchange.respond("<Error><Code>AccessDenied</Code></Error>", 403)
+          else exchange.respond("")
+        }
+        else -> fail("Unexpected request")
+      }
+    }, changedBuckets::add) { storage ->
+      storage.listObjects("bucket", "")
+      storage.getObjectDetails("bucket", "file")
+      storage.createPreviewUrl("bucket", "file", 15)
+      storage.download("bucket", "file", ByteArrayOutputStream())
+      assertTrue(changedBuckets.isEmpty())
+      val upload = UploadObject("file", "text/plain", 1, emptyMap())
+      val source = UploadSource { ByteArrayInputStream(byteArrayOf(1)) }
+      assertTrue(runCatching { storage.upload("bucket", upload, source) }.isFailure)
+      assertTrue(changedBuckets.isEmpty())
+      rejectUpload = false
+      storage.upload("bucket", upload, source)
+      assertEquals(listOf("bucket"), changedBuckets)
+    }
+  }
+
+  @Test
   fun uploadsEncodeUnicodeMetadata() = withStorage({ exchange ->
     assertEquals("=?UTF-8?B?5Lit5paH?=", exchange.requestHeaders.getFirst("x-amz-meta-note"))
     exchange.respond("")
@@ -216,6 +250,7 @@ class StorageOperationsTest {
       listOf("PUT", "DELETE").forEach { conflictAt ->
         var copies = 0
         var deletes = 0
+        val changedBuckets = mutableListOf<String>()
         withStorage({ exchange ->
           when (exchange.requestMethod) {
             "GET" -> {
@@ -241,7 +276,7 @@ class StorageOperationsTest {
             }
             else -> fail("Unexpected request")
           }
-        }) { storage ->
+        }, changedBuckets::add) { storage ->
           val result = runCatching {
             if (rename) storage.updateObject("bucket", UpdateObject("source", "target", "text/plain", null, null, emptyMap()))
             else storage.moveObjects("bucket", listOf(ObjectMove("source", "target")), { false }) { fail("Move must not complete") }
@@ -250,6 +285,7 @@ class StorageOperationsTest {
         }
         assertEquals(1, copies)
         assertEquals(if (conflictAt == "DELETE") 1 else 0, deletes)
+        assertEquals(if (conflictAt == "DELETE") listOf("bucket") else emptyList<String>(), changedBuckets)
       }
     }
   }
@@ -272,6 +308,7 @@ class StorageOperationsTest {
   @Test
   fun multipartUploadPreservesMetadataAndWriteCondition() {
     var completed = false
+    val changedBuckets = mutableListOf<String>()
     withStorage({ exchange ->
       when {
         exchange.requestURI.rawQuery.contains("uploads") -> {
@@ -288,12 +325,13 @@ class StorageOperationsTest {
           exchange.respond("<CompleteMultipartUploadResult><ETag>\"done\"</ETag></CompleteMultipartUploadResult>")
         }
       }
-    }) { storage ->
+    }, changedBuckets::add) { storage ->
       val bytes = ByteArray(16 * 1024 * 1024)
       storage.upload("bucket", UploadObject("large", "application/octet-stream", bytes.size.toLong(), mapOf("note" to "中文")),
         UploadSource { ByteArrayInputStream(bytes) })
     }
     assertTrue(completed)
+    assertEquals(listOf("bucket"), changedBuckets)
   }
 
   @Test
@@ -542,6 +580,7 @@ class StorageOperationsTest {
 
 private fun withStorage(
   handler: (HttpExchange) -> Unit,
+  onObjectsChanged: (String) -> Unit = {},
   client: OkHttpClient = OkHttpClient(),
   block: suspend (S3ObjectStorage) -> Unit,
 ) {
@@ -564,7 +603,7 @@ private fun withStorage(
     endpointUrl = "http://127.0.0.1:${server.address.port}", forcePathStyle = true,
   )
   try {
-    runBlocking { block(S3ObjectStorage(profile, client, BucketRegionResolver(client), StorageCapabilityCache())) }
+    runBlocking { block(S3ObjectStorage(profile, client, BucketRegionResolver(client), StorageCapabilityCache(), onObjectsChanged)) }
     errors.firstOrNull()?.let { throw it }
   } finally {
     server.stop(0)

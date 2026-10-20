@@ -30,7 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -166,10 +166,14 @@ fun ObjectDetailsScreen(
   if (editing && state.details != null) {
     ObjectEditDialog(
       details = state.details!!,
+      isSaving = state.isLoading,
+      error = state.error,
       onDismiss = { editing = false },
       onSave = { targetKey, contentType, cacheControl, contentDisposition, metadata ->
-        editing = false
-        viewModel.update(targetKey, contentType, cacheControl, contentDisposition, metadata, onRenamed)
+        viewModel.update(targetKey, contentType, cacheControl, contentDisposition, metadata) { savedKey ->
+          editing = false
+          if (savedKey != key) onRenamed(savedKey)
+        }
       },
     )
   }
@@ -192,7 +196,7 @@ private fun DetailsContent(
     verticalArrangement = Arrangement.spacedBy(16.dp),
   ) {
     if (isLoading || isLoadingPreview) {
-      LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+      LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
     }
     (error ?: previewError)?.let { message ->
       SelectionContainer { Text(message, color = MaterialTheme.colorScheme.error) }
@@ -242,7 +246,7 @@ private fun DetailsContent(
       Text(stringResource(R.string.text_preview_limit), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (isDownloading) {
-      LinearProgressIndicator(
+      LinearWavyProgressIndicator(
         progress = { downloadProgress ?: 0f },
         modifier = Modifier.fillMaxWidth(),
       )
@@ -574,12 +578,15 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun DetailRow(label: String, value: String) {
   Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-    Text(
-      label,
-      modifier = Modifier.weight(0.38f),
-      style = MaterialTheme.typography.labelMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Text(value, modifier = Modifier.weight(0.62f), style = MaterialTheme.typography.bodyMedium)
+    SelectionContainer(modifier = Modifier.weight(0.38f)) {
+      Text(
+        label,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+    SelectionContainer(modifier = Modifier.weight(0.62f)) {
+      Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
   }
 }

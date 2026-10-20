@@ -19,13 +19,20 @@ data class SafFile(
 
 class SafTreeScanner(
   private val resolver: ContentResolver,
-  private val cacheDir: File,
+  private val createStagedFile: (String, String) -> File,
 ) {
   suspend fun scan(treeUri: Uri): List<SafFile> = withContext(Dispatchers.IO) {
     val rootId = DocumentsContract.getTreeDocumentId(treeUri)
     val rootUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootId)
     val rootName = query(rootUri).name
-    buildList { scanChildren(treeUri, rootId, rootName, this) }
+    val files = mutableListOf<SafFile>()
+    try {
+      scanChildren(treeUri, rootId, rootName, files)
+      files
+    } catch (error: Throwable) {
+      files.filter { it.uri.scheme == "file" }.forEach { file -> file.uri.path?.let(::File)?.delete() }
+      throw error
+    }
   }
 
   private suspend fun scanChildren(treeUri: Uri, parentId: String, path: String, files: MutableList<SafFile>) {
@@ -69,11 +76,25 @@ class SafTreeScanner(
     DocumentInfo(cursor.getString(1))
   } ?: error("Unable to read selected folder")
 
-  private fun stage(uri: Uri, path: String, mimeType: String): SafFile {
-    val file = File.createTempFile("tree-", ".tmp", cacheDir)
-    resolver.openInputStream(uri).use { input ->
-      checkNotNull(input) { "Unable to read $path" }
-      file.outputStream().use(input::copyTo)
+  private suspend fun stage(uri: Uri, path: String, mimeType: String): SafFile {
+    val file = createStagedFile("tree-", ".tmp")
+    try {
+      resolver.openInputStream(uri).use { input ->
+        checkNotNull(input) { "Unable to read $path" }
+        file.outputStream().use { output ->
+          val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+          while (true) {
+            coroutineContext.ensureActive()
+            val count = input.read(buffer)
+            if (count < 0) break
+            output.write(buffer, 0, count)
+          }
+        }
+        coroutineContext.ensureActive()
+      }
+    } catch (error: Throwable) {
+      file.delete()
+      throw error
     }
     return SafFile(Uri.fromFile(file), path, mimeType, file.length())
   }

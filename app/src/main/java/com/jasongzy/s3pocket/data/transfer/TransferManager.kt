@@ -9,15 +9,12 @@ import com.jasongzy.s3pocket.data.model.UploadObject
 import com.jasongzy.s3pocket.data.storage.StorageFactory
 import com.jasongzy.s3pocket.data.storage.TransferCanceledException
 import com.jasongzy.s3pocket.data.storage.UploadSource
-import java.io.File
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -56,6 +53,7 @@ data class UploadTransfer(
   val contentType: String,
   override val contentLength: Long,
   val metadata: Map<String, String>,
+  val overwrite: Boolean = false,
 ) : TransferRequest
 
 data class DownloadTransfer(
@@ -70,43 +68,56 @@ class TransferManager(
   private val application: Application,
   private val profiles: ProfileRepository,
   private val storageFactory: StorageFactory,
+  val staging: TransferStaging,
 ) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val slots = Semaphore(2)
-  private val requests = ConcurrentHashMap<String, TransferRequest>()
-  private val cancellations = ConcurrentHashMap<String, AtomicBoolean>()
+  private val requests = mutableMapOf<String, TransferRequest>()
+  private val cancellations = mutableMapOf<String, AtomicBoolean>()
+  private val retained = mutableSetOf<String>()
   private val _items = MutableStateFlow<List<TransferItem>>(emptyList())
   val items: StateFlow<List<TransferItem>> = _items
 
   fun enqueue(requests: List<UploadTransfer>): List<String> = enqueueRequests(requests)
 
+  @Synchronized
+  fun reservedUploadKeys(profileId: String, bucket: String): Set<String> {
+    val activeIds = _items.value.filter { !it.status.isFinished }.mapTo(mutableSetOf()) { it.id }
+    return requests.filterKeys { it in activeIds }.values.filterIsInstance<UploadTransfer>()
+      .filter { it.profileId == profileId && it.bucket == bucket }.mapTo(mutableSetOf()) { it.key }
+  }
+
   fun enqueueDownload(request: DownloadTransfer): String = enqueueRequests(listOf(request)).single()
 
+  @Synchronized
   private fun enqueueRequests(requests: List<TransferRequest>): List<String> {
     if (requests.isEmpty()) return emptyList()
+    val uploads = requests.filterIsInstance<UploadTransfer>()
+    require(uploads.map { Triple(it.profileId, it.bucket, it.key) }.distinct().size == uploads.size) {
+      "Duplicate upload destination"
+    }
+    uploads.forEach {
+      require(it.key !in reservedUploadKeys(it.profileId, it.bucket)) { "An upload is already queued for: ${it.key}" }
+    }
     val ids = requests.map { request ->
       val id = UUID.randomUUID().toString()
+      if (request is UploadTransfer) staging.claim(request.uri)
       this.requests[id] = request
+      retained += id
       _items.update { it + request.toItem(id) }
-      launch(id)
       id
     }
-    ContextCompat.startForegroundService(application, Intent(application, TransferService::class.java))
+    startTransfers(ids)
     return ids
   }
 
+  @Synchronized
   fun cancel(id: String) {
     cancellations[id]?.set(true)
-    var canceledQueuedTransfer = false
     update(id) { item ->
-      if (item.status == TransferStatus.QUEUED) {
-        canceledQueuedTransfer = true
-        item.copy(status = TransferStatus.CANCELED)
-      } else {
-        item
-      }
+      if (item.status == TransferStatus.QUEUED) item.copy(status = TransferStatus.CANCELED) else item
     }
-    if (canceledQueuedTransfer) scheduleCleanup(id)
+    cleanupFinished(id)
   }
 
   fun cancel(ids: Collection<String>) = ids.forEach(::cancel)
@@ -114,22 +125,45 @@ class TransferManager(
   fun cancelActive() = _items.value.filter { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING }
     .forEach { cancel(it.id) }
 
+  @Synchronized
   fun retry(id: String) {
     val item = _items.value.firstOrNull { it.id == id } ?: return
-    if (item.status != TransferStatus.FAILED && item.status != TransferStatus.CANCELED) return
+    if (item.status != TransferStatus.FAILED) return
+    val request = requests[id]
+    if (request is UploadTransfer && request.key in reservedUploadKeys(request.profileId, request.bucket)) {
+      update(id) { it.copy(error = "An upload is already queued for: ${request.key}") }
+      return
+    }
     update(id) { it.copy(completedBytes = 0, status = TransferStatus.QUEUED, error = null) }
-    launch(id)
-    ContextCompat.startForegroundService(application, Intent(application, TransferService::class.java))
+    startTransfers(listOf(id))
   }
 
+  private fun startTransfers(ids: List<String>) {
+    runCatching { ContextCompat.startForegroundService(application, Intent(application, TransferService::class.java)) }
+      .onSuccess { ids.forEach(::launch) }
+      .onFailure { error ->
+        ids.forEach { id ->
+          update(id) { it.copy(status = TransferStatus.FAILED, error = error.message ?: error.javaClass.simpleName) }
+        }
+      }
+  }
+
+  @Synchronized
   fun dismissFinished(ids: Collection<String>) {
     val idSet = ids.toSet()
     val finishedIds = _items.value.filter { it.id in idSet && it.status.isFinished }.mapTo(mutableSetOf()) { it.id }
     _items.update { items -> items.filterNot { it.id in finishedIds } }
     finishedIds.forEach { id ->
+      retained.remove(id)
       requests.remove(id)?.let(::deleteCachedUploadSource)
       cancellations.remove(id)
     }
+  }
+
+  @Synchronized
+  fun release(ids: Collection<String>) {
+    retained.removeAll(ids.toSet())
+    dismissFinished(ids)
   }
 
   private fun launch(id: String) {
@@ -140,6 +174,14 @@ class TransferManager(
       slots.withPermit {
         if (canceled.get()) return@withPermit
         update(id) { it.copy(status = TransferStatus.RUNNING) }
+        var transferredBytes = 0L
+        val publishProgress = throttledProgress { completed, total ->
+          update(id) { it.copy(completedBytes = completed, totalBytes = total.takeIf { size -> size > 0 } ?: it.totalBytes) }
+        }
+        val reportProgress: (Long, Long) -> Unit = { completed, total ->
+          transferredBytes = completed
+          publishProgress(completed, total)
+        }
         try {
           val profile = profiles.get(request.profileId)
           val storage = storageFactory.create(profile)
@@ -151,55 +193,54 @@ class TransferManager(
                 contentType = request.contentType.ifBlank { "application/octet-stream" },
                 contentLength = request.contentLength,
                 metadata = request.metadata,
+                overwrite = request.overwrite,
               ),
               source = UploadSource {
                 application.contentResolver.openInputStream(request.uri) ?: error("Unable to open selected file")
               },
               shouldCancel = canceled::get,
-              onProgress = { completed, _ -> update(id) { it.copy(completedBytes = completed) } },
+              onProgress = reportProgress,
             )
-            is DownloadTransfer -> application.contentResolver.openOutputStream(request.uri)?.use { output ->
+            is DownloadTransfer -> application.contentResolver.openOutputStream(request.uri, "wt")?.use { output ->
               storage.download(
                 request.bucket,
                 request.key,
                 output,
-                canceled::get,
-              ) { completed, _ -> update(id) { it.copy(completedBytes = completed) } }
+                shouldCancel = canceled::get,
+                onProgress = reportProgress,
+              )
             } ?: error("Unable to open destination")
           }
-          update(id) { it.copy(completedBytes = it.totalBytes, status = TransferStatus.COMPLETED) }
-          scheduleCleanup(id)
+          update(id) { it.copy(completedBytes = transferredBytes, totalBytes = transferredBytes, status = TransferStatus.COMPLETED) }
+          cleanupFinished(id)
         } catch (error: Throwable) {
           val isCanceled = canceled.get() || error is TransferCanceledException || error is CancellationException
           update(id) {
-            it.copy(status = if (isCanceled) TransferStatus.CANCELED else TransferStatus.FAILED, error = error.message)
+            it.copy(
+              status = if (isCanceled) TransferStatus.CANCELED else TransferStatus.FAILED,
+              error = error.message ?: error.javaClass.simpleName,
+            )
           }
-          if (isCanceled) scheduleCleanup(id)
+          cleanupFinished(id)
         }
       }
     }
   }
 
-  private fun scheduleCleanup(id: String) {
-    scope.launch {
-      delay(FINISHED_RETENTION_MILLIS)
-      dismissFinished(listOf(id))
-    }
+  @Synchronized
+  private fun cleanupFinished(id: String) {
+    if (id !in retained) dismissFinished(listOf(id))
   }
 
   private fun deleteCachedUploadSource(request: TransferRequest) {
-    if (request !is UploadTransfer || request.uri.scheme != "file") return
-    val source = request.uri.path?.let(::File)?.canonicalFile ?: return
-    val cache = application.cacheDir.canonicalFile
-    if (source.path.startsWith(cache.path + File.separator)) source.delete()
+    if (request is UploadTransfer && requests.values.none { it is UploadTransfer && it.uri == request.uri }) {
+      staging.discard(request.uri)
+    }
   }
 
+  @Synchronized
   private fun update(id: String, block: (TransferItem) -> TransferItem) {
     _items.update { items -> items.map { if (it.id == id) block(it) else it } }
-  }
-
-  private companion object {
-    const val FINISHED_RETENTION_MILLIS = 30_000L
   }
 }
 
@@ -211,3 +252,18 @@ private fun TransferRequest.toItem(id: String) =
     id = id,
     totalBytes = contentLength,
   )
+
+internal fun throttledProgress(
+  nanoTime: () -> Long = System::nanoTime,
+  publish: (Long, Long) -> Unit,
+): (Long, Long) -> Unit {
+  var lastUpdate: Long? = null
+  return { completed, total ->
+    val now = nanoTime()
+    val previous = lastUpdate
+    if (previous == null || now - previous >= 200_000_000L || completed == total) {
+      lastUpdate = now
+      publish(completed, total)
+    }
+  }
+}

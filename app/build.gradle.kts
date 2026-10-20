@@ -132,6 +132,7 @@ dependencies {
   implementation(libs.androidx.media3.ui)
 
   implementation(libs.aws.s3)
+  implementation(libs.smithy.http.client.okhttp)
   implementation(libs.okhttp)
   debugImplementation(libs.androidx.compose.ui.tooling)
 

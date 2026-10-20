@@ -7,6 +7,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalContext
 import android.net.Uri
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
@@ -30,11 +31,13 @@ fun MainNavigation(
   settings: AppSettingsSnapshot,
   sharedUris: List<Uri>,
   openSharedImmediately: Boolean,
-  onSharedUrisConsumed: () -> Unit,
+  onUploadDestinationChanged: (Boolean) -> Unit,
+  onSharedUrisConsumed: (List<Uri>) -> Boolean,
 ) {
   val backStack = rememberNavBackStack(ProfilesRoute)
   val application = LocalContext.current.applicationContext as S3PocketApplication
   val container = application.container
+  SideEffect { onUploadDestinationChanged(backStack.lastOrNull() is ObjectsRoute) }
 
   SharedTransitionLayout {
     CompositionLocalProvider(LocalSharedTransitionScope provides this) {
@@ -136,8 +139,8 @@ fun MainNavigation(
               }
             },
             sharedUris = sharedUris,
-            openSharedImmediately = openSharedImmediately,
-            onSharedUrisConsumed = onSharedUrisConsumed,
+            openSharedImmediately = openSharedImmediately && backStack.lastOrNull() == route,
+            onSharedUrisConsumed = { onSharedUrisConsumed(sharedUris) },
           )
         }
         entry<ObjectDetailsRoute> { route ->

@@ -114,9 +114,10 @@ class ProfileRepository(
     }
   }
 
-  suspend fun replaceFavorites(items: List<FavoriteItem>) {
+  suspend fun moveFavorites(profileId: String, bucket: String, source: String, target: String, isPrefix: Boolean) {
     context.profileDataStore.edit { preferences ->
-      preferences[FAVORITES] = encodeFavorites(items.distinctBy { it.id })
+      val current = preferences[FAVORITES]?.let(::decodeFavorites).orEmpty()
+      preferences[FAVORITES] = encodeFavorites(current.moveFavorites(profileId, bucket, source, target, isPrefix))
     }
   }
 
@@ -313,3 +314,17 @@ data class ImportBackupResult(
   val settings: AppSettingsSnapshot?,
   val hasUnassignedPublicUrls: Boolean,
 )
+
+internal fun List<FavoriteItem>.moveFavorites(
+  profileId: String,
+  bucket: String,
+  source: String,
+  target: String,
+  isPrefix: Boolean,
+): List<FavoriteItem> = map { favorite ->
+  val matches = if (isPrefix) favorite.key.startsWith(source)
+    else favorite.kind == FavoriteKind.FILE && favorite.key == source
+  if (favorite.profileId == profileId && favorite.bucket == bucket && matches) {
+    favorite.copy(key = target + favorite.key.removePrefix(source))
+  } else favorite
+}.distinctBy { it.id }

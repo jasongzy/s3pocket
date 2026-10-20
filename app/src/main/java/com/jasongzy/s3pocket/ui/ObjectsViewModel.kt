@@ -1,13 +1,14 @@
 package com.jasongzy.s3pocket.ui
 
-import android.content.ContentResolver
 import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.jasongzy.s3pocket.R
 import java.io.File
-import java.net.URL
 import com.jasongzy.s3pocket.data.AppLog
+import com.jasongzy.s3pocket.data.downloadFileName
+import com.jasongzy.s3pocket.data.useResponse
 import com.jasongzy.s3pocket.data.GalleryImageScale
 import com.jasongzy.s3pocket.data.GalleryThumbnailSize
 import com.jasongzy.s3pocket.data.ObjectSortMode
@@ -15,12 +16,15 @@ import com.jasongzy.s3pocket.data.ObjectViewMode
 import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.SettingsRepository
 import com.jasongzy.s3pocket.data.model.FavoriteItem
+import com.jasongzy.s3pocket.data.model.FavoriteKind
 import com.jasongzy.s3pocket.data.model.ObjectItem
 import com.jasongzy.s3pocket.data.storage.ObjectMove
+import com.jasongzy.s3pocket.data.storage.ObjectPage
 import com.jasongzy.s3pocket.data.storage.ObjectStorage
 import com.jasongzy.s3pocket.data.storage.StorageOperationCanceledException
 import com.jasongzy.s3pocket.data.storage.StorageFactory
 import com.jasongzy.s3pocket.data.transfer.TransferManager
+import com.jasongzy.s3pocket.data.transfer.TransferItem
 import com.jasongzy.s3pocket.data.transfer.TransferStatus
 import com.jasongzy.s3pocket.data.transfer.UploadTransfer
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +32,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -63,12 +68,15 @@ data class ObjectsUiState(
   val isMoving: Boolean = false,
   val isCancelingMove: Boolean = false,
   val moveCanceled: Boolean = false,
+  val partialProgress: ItemProgress? = null,
   val uploadProgress: UploadProgress? = null,
-  val uploadedCount: Int? = null,
+  val uploadResult: ItemProgress? = null,
   val nextContinuationToken: String? = null,
-  val isLoadingMore: Boolean = false,
-  val isScanning: Boolean = false,
-)
+  val isLoadingAll: Boolean = false,
+) {
+  val showListingProgress: Boolean
+    get() = isLoadingAll && !isLoading && objects.isNotEmpty()
+}
 
 data class ItemProgress(val completed: Int, val total: Int)
 
@@ -78,6 +86,7 @@ data class UploadProgress(
   val completedBytes: Long = 0,
   val totalBytes: Long = 0,
   val error: String? = null,
+  val active: Boolean = false,
 )
 
 data class BatchUploadItem(
@@ -95,214 +104,198 @@ class ObjectsViewModel(
   private val profiles: ProfileRepository,
   private val settings: SettingsRepository,
   private val storageFactory: StorageFactory,
-  private val contentResolver: ContentResolver,
-  private val cacheDir: File,
   private val transferManager: TransferManager,
 ) : ViewModel() {
   @Volatile private var deleteCancelRequested = false
   @Volatile private var moveCancelRequested = false
-  private var scanJob: Job? = null
-  private var listingGeneration = 0
-  private var scanGeneration = 0
+  private var listingJob: Job? = null
+  private var completeListingRequired = false
   private val httpClient = OkHttpClient()
+  private val stagingSession = transferManager.staging.openSession()
+  private var sourceJob: Job? = null
   private val _state = MutableStateFlow(ObjectsUiState())
-  private val uploadIds = mutableSetOf<String>()
-  private var uploadsRefreshed = false
+  private val uploadIds = MutableStateFlow(emptySet<String>())
   val state: StateFlow<ObjectsUiState> = _state
   val favorites: StateFlow<List<FavoriteItem>> =
     profiles.favorites.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
   init {
-    refresh()
     viewModelScope.launch {
-      transferManager.items.collect { transfers ->
-        val uploads = transfers.filter { it.id in uploadIds }
+      transferManager.items.combine(uploadIds) { transfers, ids -> transfers.filter { it.id in ids } }.collect { uploads ->
         if (uploads.isEmpty()) return@collect
-        val active = uploads.filter { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING }
-        val failed = uploads.firstOrNull { it.status == TransferStatus.FAILED }
-        val completed = uploads.count { it.status == TransferStatus.COMPLETED }
+        val progress = uploadProgress(uploads)
         _state.update {
           it.copy(
-            isUploading = active.isNotEmpty(),
-            uploadProgress = UploadProgress(
-              completed = completed,
-              total = uploads.size,
-              completedBytes = uploads.sumOf { transfer -> transfer.completedBytes },
-              totalBytes = uploads.sumOf { transfer -> transfer.totalBytes },
-              error = failed?.error,
-            ).takeIf { active.isNotEmpty() || failed != null },
+            isUploading = progress.active,
+            uploadProgress = progress.takeIf { it.active || it.error != null },
           )
         }
-        if (active.isEmpty() && failed == null && !uploadsRefreshed) {
-          uploadsRefreshed = true
-          val uploadedCount = uploads.count { it.status == TransferStatus.COMPLETED }
-          _state.update { it.copy(uploadedCount = uploadedCount.takeIf { count -> count == uploads.size }) }
+        if (!progress.active && progress.error == null) {
+          _state.update { it.copy(uploadResult = ItemProgress(progress.completed, progress.total)) }
           refresh()
-          transferManager.dismissFinished(uploadIds)
-          uploadIds.clear()
+          val finishedIds = uploads.mapTo(mutableSetOf()) { it.id }
+          transferManager.dismissFinished(finishedIds)
+          uploadIds.update { it - finishedIds }
         }
       }
     }
   }
 
   fun refresh() {
-    val generation = ++listingGeneration
-    scanGeneration++
-    scanJob = null
-    viewModelScope.launch {
-      val startedAt = SystemClock.elapsedRealtime()
-      AppLog.debug(TAG) { "ListObjects started" }
-      _state.update {
-        it.copy(
-          isLoading = true,
-          isLoadingMore = false,
-          isScanning = false,
-          nextContinuationToken = null,
-          error = null,
-          errorRes = null,
-        )
-      }
-      runSuspendCatching {
-          val profile = profiles.get(profileId)
-          storageFactory.create(profile).listObjects(bucket, prefix)
-        }
-        .onSuccess { page ->
-          if (generation != listingGeneration) return@onSuccess
-          AppLog.debug(TAG) { "ListObjects returned ${page.items.size} items in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update {
-            it.copy(objects = page.items, nextContinuationToken = page.nextToken, isLoading = false)
-          }
-        }
-        .onFailure { error ->
-          if (generation != listingGeneration) return@onFailure
-          AppLog.error(TAG, error) { "ListObjects failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(isLoading = false, error = error.userMessage()) }
-        }
+    _state.update { it.copy(partialProgress = null) }
+    refreshListing()
+  }
+
+  private fun refreshListing(preserveError: Boolean = false) {
+    listingJob?.cancel()
+    _state.update {
+      it.copy(
+        isLoading = true,
+        nextContinuationToken = null,
+        error = it.error.takeIf { preserveError },
+        errorRes = it.errorRes.takeIf { preserveError },
+      )
     }
+    loadPages(refresh = true)
   }
 
   fun loadMore() {
-    val snapshot = _state.value
-    val token = snapshot.nextContinuationToken ?: return
-    if (snapshot.isLoading || snapshot.isLoadingMore || snapshot.isScanning) return
-    val generation = listingGeneration
-    viewModelScope.launch { loadPage(token, generation = generation) }
+    if (listingJob?.isActive == true || _state.value.nextContinuationToken == null) return
+    loadPages(refresh = false)
   }
 
   fun setCompleteListingRequired(required: Boolean) {
-    if (!required) {
-      scanGeneration++
-      scanJob = null
-      _state.update { it.copy(isScanning = false) }
-      return
-    }
-    if (_state.value.nextContinuationToken == null || scanJob?.isActive == true) return
-    val currentScan = ++scanGeneration
-    val generation = listingGeneration
-    scanJob = viewModelScope.launch {
-      _state.update { it.copy(isScanning = true) }
-      try {
-        while (currentScan == scanGeneration && generation == listingGeneration) {
-          val token = _state.value.nextContinuationToken ?: break
-          if (!loadPage(token, scanning = true, generation = generation)) break
+    completeListingRequired = required
+    _state.update { it.copy(isLoadingAll = required && listingJob?.isActive == true) }
+    if (required) loadMore()
+  }
+
+  private fun loadPages(refresh: Boolean) {
+    listingJob = viewModelScope.launch {
+      _state.update { it.copy(isLoadingAll = completeListingRequired) }
+      runSuspendCatching {
+        val storage = createStorage()
+        var replace = refresh
+        loadObjectPages(
+          initialToken = _state.value.nextContinuationToken,
+          loadAll = { completeListingRequired },
+          load = { storage.listObjects(bucket, prefix, it) },
+        ) { page ->
+          _state.update {
+            it.copy(
+              objects = if (replace) page.items else (it.objects + page.items).distinctBy(ObjectItem::key),
+              nextContinuationToken = page.nextToken,
+              isLoading = false,
+            )
+          }
+          replace = false
         }
-      } finally {
-        if (currentScan == scanGeneration) {
-          scanJob = null
-          _state.update { it.copy(isScanning = false, isLoadingMore = false) }
-        }
+      }.onFailure { error ->
+        AppLog.error(TAG, error) { "ListObjects failed" }
+        _state.update { it.copy(error = it.error ?: error.userMessage()) }
       }
+      _state.update { it.copy(isLoading = false, isLoadingAll = false) }
     }
   }
 
-  private suspend fun loadPage(token: String, scanning: Boolean = false, generation: Int): Boolean {
-    _state.update { it.copy(isLoadingMore = !scanning, error = null, errorRes = null) }
-    return runSuspendCatching {
-        val profile = profiles.get(profileId)
-        storageFactory.create(profile).listObjects(bucket, prefix, token)
-      }
-      .fold(onSuccess = { page ->
-        if (generation != listingGeneration) return@fold false
-        _state.update { state ->
-          state.copy(
-            objects = (state.objects + page.items).distinctBy(ObjectItem::key),
-            nextContinuationToken = page.nextToken,
-            isLoadingMore = false,
-          )
-        }
-        true
-      }, onFailure = { error ->
-        if (generation != listingGeneration) return@fold false
-        AppLog.error(TAG, error) { "ListObjects page failed" }
-        _state.update { it.copy(isLoadingMore = false, isScanning = false, error = error.userMessage()) }
-        false
-      })
+  fun upload(
+    uri: Uri, key: String, contentType: String, contentLength: Long, metadata: Map<String, String>, overwrite: Boolean = false,
+  ) {
+    enqueueUploads(listOf(BatchUploadItem(uri, key, contentType, contentLength, metadata)), overwrite)
   }
 
-  fun upload(uri: Uri, key: String, contentType: String, contentLength: Long, metadata: Map<String, String>) {
-    enqueueUploads(listOf(BatchUploadItem(uri, key, contentType, contentLength, metadata)))
+  fun uploadBatch(items: List<BatchUploadItem>, overwrite: Boolean = false) {
+    enqueueUploads(items, overwrite)
   }
 
-  fun uploadBatch(items: List<BatchUploadItem>) {
-    enqueueUploads(items)
+  suspend fun hasUploadConflicts(keys: List<String>): Boolean {
+    if (keys.size != keys.distinct().size) return true
+    val reserved = transferManager.reservedUploadKeys(profileId, bucket)
+    if (keys.any { it in reserved }) return true
+    val storage = createStorage()
+    return storage.existingObjectKeys(bucket, keys).isNotEmpty()
   }
 
-  private fun enqueueUploads(items: List<BatchUploadItem>) {
+  suspend fun availableUploadKeys(keys: List<String>): List<String> {
+    val storage = createStorage()
+    val queried = keys.toSet()
+    val occupied = storage.existingObjectKeys(bucket, keys) + transferManager.reservedUploadKeys(profileId, bucket)
+    return uniqueUploadKeys(keys) { it in occupied || it !in queried && storage.objectExists(bucket, it) }
+  }
+
+  private fun enqueueUploads(items: List<BatchUploadItem>, overwrite: Boolean) {
     if (items.isEmpty()) return
-    uploadsRefreshed = false
     val ids = transferManager.enqueue(items.map {
-      UploadTransfer(profileId, bucket, it.uri, it.key, it.contentType, it.contentLength, it.metadata)
+      UploadTransfer(profileId, bucket, it.uri, it.key, it.contentType, it.contentLength, it.metadata, overwrite)
     })
-    uploadIds += ids
-    _state.update { it.copy(isUploading = true, uploadProgress = UploadProgress(0, items.size)) }
+    _state.update { it.copy(isUploading = true, uploadProgress = UploadProgress(0, items.size, active = true)) }
+    uploadIds.update { it + ids }
   }
 
   fun cancelUploads() {
-    val failed = transferManager.items.value.any { it.id in uploadIds && it.status == TransferStatus.FAILED }
-    if (failed) {
-      transferManager.dismissFinished(uploadIds)
-      uploadIds.clear()
-      _state.update { it.copy(isUploading = false, uploadProgress = null) }
+    if (transferManager.items.value.any {
+        it.id in uploadIds.value && (it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING)
+      }) {
+      transferManager.cancel(uploadIds.value)
     } else {
-      transferManager.cancel(uploadIds)
+      transferManager.dismissFinished(uploadIds.value)
+      uploadIds.value = emptySet()
+      _state.update { it.copy(isUploading = false, uploadProgress = null) }
+      refresh()
     }
   }
 
   fun retryUploads() {
-    transferManager.items.value.filter { it.id in uploadIds && it.status == TransferStatus.FAILED }
+    transferManager.items.value.filter { it.id in uploadIds.value && it.status == TransferStatus.FAILED }
       .forEach { transferManager.retry(it.id) }
   }
 
-  fun consumeUploadedCount() = _state.update { it.copy(uploadedCount = null) }
+  fun consumeUploadResult() = _state.update { it.copy(uploadResult = null) }
 
   fun createFolder(name: String) {
-    runOperation("CreateFolder") {
-      require(name.isNotBlank() && '/' !in name.trim('/')) { "Invalid folder name" }
-      it.createFolder(bucket, prefix + name.trim('/'))
+    if (_state.value.isWorking) return
+    viewModelScope.launch {
+      _state.update { it.copy(isWorking = true, error = null, errorRes = null) }
+      runSuspendCatching {
+        require(name.isNotBlank() && '/' !in name) { "Invalid folder name" }
+        createStorage().createFolder(bucket, prefix + name)
+      }.onSuccess {
+        _state.update { it.copy(isWorking = false) }
+        refresh()
+      }.onFailure { error ->
+        AppLog.error(TAG, error) { "CreateFolder failed" }
+        val errorRes = error.operationErrorRes()
+        _state.update {
+          it.copy(isWorking = false, error = if (errorRes == null) error.userMessage() else null, errorRes = errorRes)
+        }
+      }
     }
   }
 
   fun downloadSource(url: String) {
-    viewModelScope.launch {
-      _state.update { it.copy(isDownloadingSource = true, downloadedSource = null, error = null) }
-      runSuspendCatching {
+    val parsed = parseDownloadUrl(url)
+    if (parsed == null) {
+      _state.update { it.copy(error = null, errorRes = R.string.error_source_url) }
+      return
+    }
+    sourceJob?.cancel()
+    sourceJob = viewModelScope.launch {
+      var stagedFile: File? = null
+      var delivered = false
+      _state.update { it.copy(isDownloadingSource = true, downloadedSource = null, error = null, errorRes = null) }
+      try {
+        runSuspendCatching {
           withContext(Dispatchers.IO) {
-            val parsed = URL(url.trim())
-            require(parsed.protocol == "http" || parsed.protocol == "https") { "Enter an HTTP or HTTPS URL" }
             val request = Request.Builder().url(parsed).get().build()
-            httpClient.newCall(request).execute().use { response ->
+            httpClient.newCall(request).useResponse { response ->
               if (!response.isSuccessful) error("Download failed (${response.code})")
               val body = response.body
-              val name = response.header("Content-Disposition")?.substringAfter("filename=", "")
-                ?.trim(' ', '"')?.takeIf { it.isNotBlank() }
-                ?: parsed.path.substringAfterLast('/').takeIf { it.isNotBlank() }
-                ?: "download"
-              val safeName = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-              val file = File.createTempFile("url-", "-$safeName", cacheDir)
+              val name = downloadFileName(response.request.url, response.header("Content-Disposition"))
+              val file = stagingSession.create("url-", ".tmp").also { stagedFile = it }
               file.outputStream().use { output -> body.byteStream().use { it.copyTo(output) } }
               DownloadedSource(
                 Uri.fromFile(file),
-                safeName,
+                name,
                 body.contentType()?.toString() ?: "application/octet-stream",
                 file.length(),
                 url.trim(),
@@ -310,12 +303,19 @@ class ObjectsViewModel(
             }
           }
         }
-        .onSuccess { source -> _state.update { it.copy(isDownloadingSource = false, downloadedSource = source) } }
+        .onSuccess { source ->
+          _state.update { it.copy(isDownloadingSource = false, downloadedSource = source) }
+          delivered = true
+        }
         .onFailure { error -> _state.update { it.copy(isDownloadingSource = false, error = error.userMessage()) } }
+      } finally {
+        if (!delivered) stagedFile?.let { transferManager.staging.discard(Uri.fromFile(it)) }
+      }
     }
   }
 
   fun requestDelete(items: List<ObjectItem>) {
+    if (_state.value.isWorking || items.isEmpty()) return
     viewModelScope.launch {
       deleteCancelRequested = false
       val startedAt = SystemClock.elapsedRealtime()
@@ -328,12 +328,13 @@ class ObjectsViewModel(
           deleteCanceled = false,
           error = null,
           errorRes = null,
+          partialProgress = null,
           deleteProgress = null,
         )
       }
       runSuspendCatching {
           val storage = createStorage()
-          val plan = buildDeletePlan(storage, items)
+          val plan = buildDeletePlan(storage, bucket, items) { deleteCancelRequested }
           if (plan.hasNonEmptyFolder) {
             require(settings.settings.first().allowRecursiveFolderDelete) { "Recursive folder deletion is disabled" }
             _state.update { it.copy(isWorking = false, isDeleting = false, pendingRecursiveDelete = items) }
@@ -347,6 +348,7 @@ class ObjectsViewModel(
   }
 
   fun confirmRecursiveDelete() {
+    if (_state.value.isWorking) return
     val items = _state.value.pendingRecursiveDelete ?: return
     viewModelScope.launch {
       deleteCancelRequested = false
@@ -361,13 +363,14 @@ class ObjectsViewModel(
           pendingRecursiveDelete = null,
           error = null,
           errorRes = null,
+          partialProgress = null,
           deleteProgress = null,
         )
       }
       runSuspendCatching {
           require(settings.settings.first().allowRecursiveFolderDelete) { "Recursive folder deletion is disabled" }
           val storage = createStorage()
-          deletePlan(storage, items, buildDeletePlan(storage, items))
+          deletePlan(storage, items, buildDeletePlan(storage, bucket, items) { deleteCancelRequested })
         }
         .onFailure { error -> handleDeleteFailure(error) }
       AppLog.debug(TAG) { "RecursiveDelete finished in ${SystemClock.elapsedRealtime() - startedAt} ms" }
@@ -383,7 +386,7 @@ class ObjectsViewModel(
   }
 
   fun move(items: List<ObjectItem>, destinationPrefix: String) {
-    if (items.isEmpty()) return
+    if (items.isEmpty() || _state.value.isWorking) return
     viewModelScope.launch {
       moveCancelRequested = false
       val startedAt = SystemClock.elapsedRealtime()
@@ -397,15 +400,13 @@ class ObjectsViewModel(
           moveProgress = null,
           error = null,
           errorRes = null,
+          partialProgress = null,
         )
       }
       runSuspendCatching {
           val storage = createStorage()
-          val plan = buildMovePlan(storage, items, destinationPrefix)
-          storage.moveObjects(bucket, plan.moves, { moveCancelRequested }) { completed, total ->
-            _state.update { it.copy(moveProgress = ItemProgress(completed, total)) }
-          }
-          updateMovedFavorites(plan.pathMappings)
+          val plan = buildMovePlan(storage, bucket, items, destinationPrefix) { moveCancelRequested }
+          executeMovePlan(storage, plan)
         }
         .onSuccess {
           AppLog.debug(TAG) { "Move succeeded in ${SystemClock.elapsedRealtime() - startedAt} ms" }
@@ -424,94 +425,35 @@ class ObjectsViewModel(
     _state.update { it.copy(isCancelingMove = true) }
   }
 
-  private fun runOperation(
-    operation: String,
-    itemCount: Int = 1,
-    block: suspend (ObjectStorage) -> Unit,
-  ) {
-    viewModelScope.launch {
-      val startedAt = SystemClock.elapsedRealtime()
-      AppLog.debug(TAG) { "$operation started ($itemCount items)" }
-      _state.update { it.copy(isWorking = true, error = null, errorRes = null) }
-      runSuspendCatching {
-          val profile = profiles.get(profileId)
-          block(storageFactory.create(profile))
-        }
-        .onSuccess {
-          AppLog.debug(TAG) { "$operation succeeded in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.update { it.copy(isWorking = false) }
-          refresh()
-        }
-        .onFailure { error ->
-          AppLog.error(TAG, error) { "$operation failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          val errorRes = error.operationErrorRes()
-          _state.update {
-            it.copy(isWorking = false, error = if (errorRes == null) error.userMessage() else null, errorRes = errorRes)
-          }
-        }
-    }
-  }
-
   private suspend fun createStorage(): ObjectStorage {
     val profile = profiles.get(profileId)
     return storageFactory.create(profile)
   }
 
-  private suspend fun buildMovePlan(
-    storage: ObjectStorage,
-    items: List<ObjectItem>,
-    destinationPrefix: String,
-  ): MovePlan {
-    val destination = destinationPrefix.trim('/').let { if (it.isEmpty()) "" else "$it/" }
-    val moves = mutableListOf<ObjectMove>()
-    val pathMappings = mutableListOf<MovePathMapping>()
-    items.forEach { item ->
-      if (moveCancelRequested) throw StorageOperationCanceledException()
-      if (item.isFolder) {
-        val sourcePrefix = item.key.trimEnd('/') + "/"
-        val targetPrefix = destination + sourcePrefix.removeSuffix("/").substringAfterLast('/') + "/"
-        require(sourcePrefix != targetPrefix) { "Source and destination are the same" }
-        require(!destination.startsWith(sourcePrefix)) { "Destination is inside source folder" }
-        storage.listObjectKeys(bucket, sourcePrefix) { moveCancelRequested }.forEach { sourceKey ->
-          moves += ObjectMove(sourceKey, targetPrefix + sourceKey.removePrefix(sourcePrefix))
-        }
-        pathMappings += MovePathMapping(sourcePrefix, targetPrefix, isPrefix = true)
-      } else {
-        val targetKey = destination + item.key.substringAfterLast('/')
-        require(item.key != targetKey) { "Source and destination are the same" }
-        moves += ObjectMove(item.key, targetKey)
-        pathMappings += MovePathMapping(item.key, targetKey, isPrefix = false)
+  private suspend fun executeMovePlan(storage: ObjectStorage, plan: MovePlan) {
+    var completed = 0
+    val favoriteFiles = profiles.favorites.first()
+      .filter { it.profileId == profileId && it.bucket == bucket && it.kind == FavoriteKind.FILE }
+      .mapTo(mutableSetOf()) { it.key }
+    suspend fun moved(move: ObjectMove) {
+      completed++
+      _state.update { it.copy(moveProgress = ItemProgress(completed, maxOf(plan.total, completed))) }
+      if (move.sourceKey in favoriteFiles) {
+        profiles.moveFavorites(profileId, bucket, move.sourceKey, move.targetKey, isPrefix = false)
       }
     }
-    val distinctMoves = moves.distinctBy { it.sourceKey }
-    require(distinctMoves.map { it.targetKey }.distinct().size == distinctMoves.size) { "Duplicate destination object" }
-    return MovePlan(distinctMoves, pathMappings)
-  }
-
-  private suspend fun updateMovedFavorites(pathMappings: List<MovePathMapping>) {
-    val current = profiles.favorites.first()
-    val updated = current.map { favorite ->
-      if (favorite.profileId != profileId || favorite.bucket != bucket) return@map favorite
-      val mapping = pathMappings.filter { it.matches(favorite.key) }.maxByOrNull { it.source.length }
-        ?: return@map favorite
-      favorite.copy(key = mapping.target + favorite.key.removePrefix(mapping.source))
+    _state.update { it.copy(moveProgress = ItemProgress(0, plan.total)) }
+    storage.moveObjects(bucket, plan.files, { moveCancelRequested }, ::moved)
+    plan.folders.forEach { folder ->
+      storage.movePrefix(
+        bucket,
+        folder.source,
+        folder.target,
+        { moveCancelRequested },
+        ::moved,
+      )
+      profiles.moveFavorites(profileId, bucket, folder.source, folder.target, isPrefix = true)
     }
-    if (updated != current) profiles.replaceFavorites(updated)
-  }
-
-  private suspend fun buildDeletePlan(
-    storage: ObjectStorage,
-    items: List<ObjectItem>,
-  ): DeletePlan {
-    val keys = items.filterNot { it.isFolder }.mapTo(mutableListOf()) { it.key }
-    var hasNonEmptyFolder = false
-    items.filter { it.isFolder }.forEach { folder ->
-      val folderPrefix = folder.key.trimEnd('/') + "/"
-      val folderKeys = storage.listObjectKeys(bucket, folderPrefix) { deleteCancelRequested }
-      hasNonEmptyFolder = hasNonEmptyFolder || folderKeys.any { it != folderPrefix }
-      keys += folderKeys
-    }
-    return DeletePlan(keys.distinct(), hasNonEmptyFolder)
   }
 
   private suspend fun deletePlan(
@@ -519,11 +461,23 @@ class ObjectsViewModel(
     items: List<ObjectItem>,
     plan: DeletePlan,
   ) {
-    storage.deleteObjects(bucket, plan.keys, { deleteCancelRequested }) { completed, total ->
-      _state.update { it.copy(deleteProgress = ItemProgress(completed, total)) }
+    var completed = 0
+    val currentFavorites = profiles.favorites.first().filter { it.profileId == profileId && it.bucket == bucket }
+    suspend fun deleted(keys: List<String>) {
+      completed += keys.size
+      _state.update { it.copy(deleteProgress = ItemProgress(completed, maxOf(plan.total, completed))) }
+      val removed = currentFavorites.filter {
+        it.key in keys && (it.kind == FavoriteKind.FILE || it.key in plan.fileKeys)
+      }
+      if (removed.isNotEmpty()) profiles.setFavorites(removed, false)
     }
-    removeDeletedFavorites(items)
-    val deletedCount = maxOf(items.size, plan.keys.size)
+    _state.update { it.copy(deleteProgress = ItemProgress(0, plan.total)) }
+    storage.deleteObjects(bucket, plan.fileKeys, { deleteCancelRequested }, ::deleted)
+    plan.recursivePrefixes.forEach { folderPrefix ->
+      storage.deletePrefix(bucket, folderPrefix, { deleteCancelRequested }, ::deleted)
+      removeFolderFavorites(folderPrefix)
+    }
+    val deletedCount = maxOf(items.size, completed)
     _state.update {
       it.copy(
         isWorking = false,
@@ -536,12 +490,10 @@ class ObjectsViewModel(
     refresh()
   }
 
-  private suspend fun removeDeletedFavorites(items: List<ObjectItem>) {
-    val fileKeys = items.filterNot { it.isFolder }.mapTo(mutableSetOf()) { it.key }
-    val folderPrefixes = items.filter { it.isFolder }.map { it.key.trimEnd('/') + "/" }
+  private suspend fun removeFolderFavorites(prefix: String) {
     val deletedFavorites = profiles.favorites.first().filter { favorite ->
       favorite.profileId == profileId && favorite.bucket == bucket &&
-        (favorite.key in fileKeys || folderPrefixes.any { favorite.key.startsWith(it) })
+        favorite.key.startsWith(prefix)
     }
     profiles.setFavorites(deletedFavorites, false)
   }
@@ -557,9 +509,10 @@ class ObjectsViewModel(
           pendingRecursiveDelete = null,
           deleteProgress = null,
           deleteCanceled = true,
+          partialProgress = it.deleteProgress,
         )
       }
-      refresh()
+      refreshListing()
       return
     }
     AppLog.error(TAG, error) { "Delete failed" }
@@ -573,8 +526,10 @@ class ObjectsViewModel(
         deleteProgress = null,
         error = if (errorRes == null) error.userMessage() else null,
         errorRes = errorRes,
+        partialProgress = it.deleteProgress?.takeIf { progress -> progress.completed > 0 },
       )
     }
+    refreshListing(preserveError = true)
   }
 
   private fun handleMoveFailure(error: Throwable, startedAt: Long) {
@@ -587,9 +542,10 @@ class ObjectsViewModel(
           isCancelingMove = false,
           moveProgress = null,
           moveCanceled = true,
+          partialProgress = it.moveProgress,
         )
       }
-      refresh()
+      refreshListing()
       return
     }
     AppLog.error(TAG, error) { "Move failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
@@ -602,17 +558,17 @@ class ObjectsViewModel(
         moveProgress = null,
         error = if (errorRes == null) error.userMessage() else null,
         errorRes = errorRes,
+        partialProgress = it.moveProgress?.takeIf { progress -> progress.completed > 0 },
       )
     }
+    refreshListing(preserveError = true)
   }
-
-  fun clearError() = _state.update { it.copy(error = null, errorRes = null) }
 
   fun consumeDeletedCount() = _state.update { it.copy(deletedCount = null) }
 
-  fun consumeDeleteCanceled() = _state.update { it.copy(deleteCanceled = false) }
+  fun consumeDeleteCanceled() = _state.update { it.copy(deleteCanceled = false, partialProgress = null) }
 
-  fun consumeMoveCanceled() = _state.update { it.copy(moveCanceled = false) }
+  fun consumeMoveCanceled() = _state.update { it.copy(moveCanceled = false, partialProgress = null) }
 
   fun consumeDownloadedSource() = _state.update { it.copy(downloadedSource = null) }
 
@@ -640,8 +596,8 @@ class ObjectsViewModel(
   }
 
   override fun onCleared() {
-    transferManager.dismissFinished(uploadIds)
-    super.onCleared()
+    stagingSession.close()
+    transferManager.release(uploadIds.value)
   }
 
   private companion object {
@@ -649,36 +605,61 @@ class ObjectsViewModel(
   }
 }
 
-private fun ObjectItem.favorite(profileId: String, bucket: String): FavoriteItem =
-  FavoriteItem(
-    profileId = profileId,
-    bucket = bucket,
-    key = key,
-    kind = if (isFolder) com.jasongzy.s3pocket.data.model.FavoriteKind.FOLDER
-    else com.jasongzy.s3pocket.data.model.FavoriteKind.FILE,
+internal fun uploadProgress(items: List<TransferItem>): UploadProgress =
+  UploadProgress(
+    completed = items.count { it.status == TransferStatus.COMPLETED },
+    total = items.size,
+    completedBytes = items.sumOf { it.completedBytes },
+    totalBytes = items.sumOf { it.totalBytes },
+    error = items.firstOrNull { it.status == TransferStatus.FAILED }?.let { it.error ?: "Upload failed" },
+    active = items.any { it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING },
   )
+
+internal suspend fun loadObjectPages(
+  initialToken: String?,
+  loadAll: () -> Boolean,
+  load: suspend (String?) -> ObjectPage,
+  onPage: (ObjectPage) -> Unit,
+) {
+  var token = initialToken
+  do {
+    val page = load(token)
+    onPage(page)
+    token = page.nextToken
+  } while (loadAll() && token != null)
+}
 
 private fun Throwable.operationErrorRes(): Int? =
   when {
     message == "Invalid folder name" -> com.jasongzy.s3pocket.R.string.error_invalid_folder_name
     message == "Recursive folder deletion is disabled" -> com.jasongzy.s3pocket.R.string.error_recursive_delete_disabled
     message == "Source and destination are the same" -> com.jasongzy.s3pocket.R.string.error_same_destination
-    message == "Destination is inside source folder" -> com.jasongzy.s3pocket.R.string.error_destination_inside_source
+    message == "Source and destination folders overlap" -> com.jasongzy.s3pocket.R.string.error_overlapping_folders
     message?.startsWith("Object already exists:") == true -> com.jasongzy.s3pocket.R.string.error_destination_exists
     else -> null
   }
 
-private data class DeletePlan(val keys: List<String>, val hasNonEmptyFolder: Boolean)
+internal suspend fun uniqueUploadKeys(
+  keys: List<String>,
+  exists: suspend (String) -> Boolean,
+): List<String> {
+  val occupied = mutableSetOf<String>()
+  return keys.map { key ->
+    var candidate = key
+    var number = 1
+    while (candidate in occupied || exists(candidate)) {
+      occupied += candidate
+      candidate = numberedKey(key, number++)
+    }
+    occupied += candidate
+    candidate
+  }
+}
 
-private data class MovePlan(
-  val moves: List<ObjectMove>,
-  val pathMappings: List<MovePathMapping>,
-)
-
-private data class MovePathMapping(
-  val source: String,
-  val target: String,
-  val isPrefix: Boolean,
-) {
-  fun matches(key: String): Boolean = if (isPrefix) key.startsWith(source) else key == source
+private fun numberedKey(key: String, number: Int): String {
+  val slash = key.lastIndexOf('/')
+  val prefix = if (slash >= 0) key.substring(0, slash + 1) else ""
+  val fileName = key.substring(slash + 1)
+  val dot = fileName.lastIndexOf('.').takeIf { it > 0 } ?: fileName.length
+  return "$prefix${fileName.substring(0, dot)} ($number)${fileName.substring(dot)}"
 }

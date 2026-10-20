@@ -15,12 +15,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -539,34 +537,24 @@ private fun setLanguage(languageTag: String) {
   AppCompatDelegate.setApplicationLocales(locales)
 }
 
-private data class TemplateEntry(val key: String, val value: String)
-
 @Composable
 private fun MetadataTemplateDialog(initial: Map<String, String>, onDismiss: () -> Unit, onSave: (Map<String, String>) -> Unit) {
-  val entries = remember(initial) { mutableStateListOf<TemplateEntry>().apply { addAll(initial.map { TemplateEntry(it.key, it.value) }) } }
+  val entries = remember(initial) { mutableStateListOf<MetadataEntry>().apply { addAll(initial.map { MetadataEntry(it.key, it.value) }) } }
   var duplicate by remember { mutableStateOf(false) }
   AlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(stringResource(R.string.metadata_template)) },
     text = {
       LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(entries.size) { index ->
-          val entry = entries[index]
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(entry.key, { entries[index] = entry.copy(key = it); duplicate = false }, label = { Text(stringResource(R.string.metadata_key)) }, modifier = Modifier.weight(1f))
-            OutlinedTextField(entry.value, { entries[index] = entry.copy(value = it) }, label = { Text(stringResource(R.string.metadata_value)) }, modifier = Modifier.weight(1f))
-            TooltipIconButton(stringResource(R.string.delete), { entries.removeAt(index) }) { AppIcon(R.drawable.ms_delete_24, null) }
-          }
-        }
-        item { TextButton(onClick = { entries += TemplateEntry("", "") }) { Text(stringResource(R.string.add_metadata)) } }
+        metadataFields(entries) { duplicate = false }
         if (duplicate) item { Text(stringResource(R.string.error_metadata_duplicate), color = MaterialTheme.colorScheme.error) }
       }
     },
     confirmButton = {
       Button(onClick = {
-        val valid = entries.filter { it.key.isNotBlank() }
-        duplicate = valid.map { it.key.lowercase() }.distinct().size != valid.size
-        if (!duplicate) onSave(valid.associate { it.key.trim() to it.value })
+        val values = entries.toMetadata()
+        duplicate = values == null
+        if (values != null) onSave(values)
       }) { Text(stringResource(R.string.save)) }
     },
     dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },

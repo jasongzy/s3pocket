@@ -29,6 +29,7 @@ data class UploadObject(
   val contentType: String,
   val contentLength: Long,
   val metadata: Map<String, String>,
+  val overwrite: Boolean = false,
 )
 
 data class UpdateObject(

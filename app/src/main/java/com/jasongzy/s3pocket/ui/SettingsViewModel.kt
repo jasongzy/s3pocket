@@ -14,6 +14,7 @@ import com.jasongzy.s3pocket.data.PaletteMode
 import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.SettingsRepository
 import com.jasongzy.s3pocket.data.ThemeMode
+import com.jasongzy.s3pocket.S3PocketApplication
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -94,7 +95,7 @@ class SettingsViewModel(
     viewModelScope.launch(Dispatchers.IO) {
       SingletonImageLoader.get(context).memoryCache?.clear()
       SingletonImageLoader.get(context).diskCache?.clear()
-      context.cacheDir.listFiles().orEmpty().forEach { it.deleteRecursively() }
+      (context as S3PocketApplication).container.transferManager.staging.clearUnused()
       _cacheBytes.value = cacheSize()
     }
   }

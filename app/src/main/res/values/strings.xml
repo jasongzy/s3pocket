@@ -1,4 +1,8 @@
 <resources>
+    <plurals name="operation_canceled_progress">
+        <item quantity="one">Canceled after completing %1$d/%2$d item</item>
+        <item quantity="other">Canceled after completing %1$d/%2$d items</item>
+    </plurals>
     <string name="app_name">S3 Pocket</string>
     <string name="app_tagline">Access object storage anywhere</string>
     <string name="back">Back</string>
@@ -54,10 +58,11 @@
     <string name="canceling">Canceling…</string>
     <string name="deletion_canceled">Deletion canceled. Items already deleted cannot be recovered.</string>
     <string name="preparing_move">Preparing move…</string>
-    <string name="move_progress">Moving %1$d of %2$d objects</string>
+    <string name="move_progress">Moving: %1$d/%2$d</string>
+    <string name="operation_partial_failure">Completed before stopping: %1$d/%2$d</string>
     <string name="move_canceled">Move canceled. Objects already moved remain at the destination.</string>
     <string name="error_same_destination">The source and destination are the same.</string>
-    <string name="error_destination_inside_source">A folder cannot be moved into itself.</string>
+    <string name="error_overlapping_folders">The source and destination folders overlap. Choose another location.</string>
     <string name="error_destination_exists">A file with the same name already exists at the destination.</string>
     <string name="profiles">Profiles</string>
     <string name="favorites">Favorites</string>
@@ -70,7 +75,10 @@
     <string name="search_files">Search this folder</string>
     <string name="search_hint">Search names</string>
     <string name="no_search_results">No matching items</string>
-    <string name="searching_items">Searching… %1$d items scanned</string>
+    <plurals name="loading_items">
+        <item quantity="one">Loading… %1$d item loaded</item>
+        <item quantity="other">Loading… %1$d items loaded</item>
+    </plurals>
     <string name="path_navigation">Navigate to parent folder</string>
     <string name="reorder_profiles">Long-press and drag to reorder</string>
     <string name="profile_info">Profile information</string>
@@ -118,6 +126,7 @@
     <string name="remove_public_url">Remove mapping</string>
     <string name="error_endpoint_url">Enter a valid HTTPS endpoint without credentials, query parameters, or a fragment</string>
     <string name="error_public_url">Enter a valid HTTPS public URL without credentials, query parameters, or a fragment</string>
+    <string name="error_source_url">Enter a valid HTTPS URL without credentials</string>
     <string name="error_public_bucket">Enter a valid bucket name</string>
     <string name="error_duplicate_public_bucket">Each bucket can have only one public URL mapping</string>
     <string name="open_r2_dashboard">Open R2 dashboard</string>
@@ -139,7 +148,7 @@
     <string name="upload_local_file">Upload from file</string>
     <string name="upload_from_url">Upload from URL</string>
     <string name="source_url">Source URL</string>
-    <string name="url_download_description">The file is downloaded to the app cache, then uploaded directly to the current folder.</string>
+    <string name="url_download_description">Download the file to the app cache, then review its upload options.</string>
     <string name="download_and_upload">Download</string>
     <string name="object_key">Object key</string>
     <string name="content_type">Content-Type</string>
@@ -175,11 +184,13 @@
         <item quantity="one">Upload %1$d file</item>
         <item quantity="other">Upload %1$d files</item>
     </plurals>
+    <string name="preparing_upload">Checking for existing files…</string>
     <string name="uploading_files">Uploading files</string>
-    <string name="upload_progress">%1$d of %2$d uploaded</string>
+    <string name="upload_progress">Uploaded: %1$d/%2$d</string>
     <string name="objects_exist_title">Some objects already exist</string>
-    <string name="objects_exist_description">Choose whether to overwrite matching objects or automatically rename the shared files.</string>
+    <string name="objects_exist_description">Choose whether to overwrite matching objects or automatically rename the selected files.</string>
     <string name="object_load_error">Couldn’t load object</string>
+    <string name="image_preview_error">Couldn’t load image</string>
     <string name="text_preview">Text preview</string>
     <string name="video_preview">Video preview</string>
     <string name="copy_text">Copy text</string>
@@ -262,7 +273,10 @@
     <string name="github_description">github.com/jasongzy/s3pocket</string>
     <string name="version">Version</string>
     <string name="transfers">Transfers</string>
-    <string name="transfer_notification">Transferring %1$d files</string>
+    <plurals name="transfer_notification">
+        <item quantity="one">Transferring %1$d file</item>
+        <item quantity="other">Transferring %1$d files</item>
+    </plurals>
     <string name="transfer_bytes">%1$s of %2$s</string>
     <string name="retry">Retry</string>
     <string name="upload_folder">Upload from folder</string>

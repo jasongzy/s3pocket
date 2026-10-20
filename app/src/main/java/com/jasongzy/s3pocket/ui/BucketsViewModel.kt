@@ -8,6 +8,7 @@ import com.jasongzy.s3pocket.data.AppLog
 import com.jasongzy.s3pocket.data.model.BucketItem
 import com.jasongzy.s3pocket.data.model.FavoriteItem
 import com.jasongzy.s3pocket.data.storage.StorageFactory
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -28,6 +29,7 @@ class BucketsViewModel(
   private val profiles: ProfileRepository,
   private val storageFactory: StorageFactory,
 ) : ViewModel() {
+  private var refreshJob: Job? = null
   private val _state = MutableStateFlow(BucketsUiState(isLoading = true))
   val state: StateFlow<BucketsUiState> = _state
   val favorites: StateFlow<List<FavoriteItem>> =
@@ -38,7 +40,8 @@ class BucketsViewModel(
   }
 
   fun refresh() {
-    viewModelScope.launch {
+    refreshJob?.cancel()
+    refreshJob = viewModelScope.launch {
       val startedAt = SystemClock.elapsedRealtime()
       AppLog.debug(TAG) { "ListBuckets started" }
       _state.update { it.copy(isLoading = true, error = null, errorHintRes = null) }

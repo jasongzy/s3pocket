@@ -38,28 +38,53 @@ interface ObjectStorage {
     bucket: String,
     key: String,
     output: OutputStream,
+    decodeContentEncoding: Boolean = false,
     shouldCancel: () -> Boolean = { false },
     onProgress: (completed: Long, total: Long) -> Unit = { _, _ -> },
   )
 
   suspend fun objectExists(bucket: String, key: String): Boolean
 
+  suspend fun existingObjectKeys(bucket: String, keys: List<String>, shouldCancel: () -> Boolean = { false }): Set<String>
+
   suspend fun createFolder(bucket: String, key: String)
 
-  suspend fun listObjectKeys(bucket: String, prefix: String, shouldCancel: () -> Boolean): List<String>
+  suspend fun scanObjectKeys(
+    bucket: String,
+    prefix: String,
+    shouldCancel: () -> Boolean,
+    onPage: suspend (List<String>) -> Unit,
+  )
 
   suspend fun deleteObjects(
     bucket: String,
     keys: List<String>,
     shouldCancel: () -> Boolean,
-    onProgress: (completed: Int, total: Int) -> Unit,
+    onDeleted: suspend (List<String>) -> Unit,
+  )
+
+  suspend fun deletePrefix(
+    bucket: String,
+    prefix: String,
+    shouldCancel: () -> Boolean,
+    onDeleted: suspend (List<String>) -> Unit,
   )
 
   suspend fun moveObjects(
     bucket: String,
     moves: List<ObjectMove>,
     shouldCancel: () -> Boolean,
-    onProgress: (completed: Int, total: Int) -> Unit,
+    onMoved: suspend (ObjectMove) -> Unit,
+  )
+
+  suspend fun validateMoves(bucket: String, moves: List<ObjectMove>, shouldCancel: () -> Boolean)
+
+  suspend fun movePrefix(
+    bucket: String,
+    sourcePrefix: String,
+    targetPrefix: String,
+    shouldCancel: () -> Boolean,
+    onMoved: suspend (ObjectMove) -> Unit,
   )
 
   suspend fun updateObject(bucket: String, request: UpdateObject)
@@ -71,6 +96,12 @@ data class ObjectPage(
 )
 
 data class ObjectMove(val sourceKey: String, val targetKey: String)
+
+internal fun folderMoves(keys: List<String>, sourcePrefix: String, targetPrefix: String): List<ObjectMove> =
+  keys.map {
+    require(it.startsWith(sourcePrefix)) { "Object is outside source folder" }
+    ObjectMove(it, targetPrefix + it.removePrefix(sourcePrefix))
+  }
 
 class StorageOperationCanceledException : Exception()
 

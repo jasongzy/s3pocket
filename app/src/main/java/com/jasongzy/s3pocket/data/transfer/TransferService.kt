@@ -80,7 +80,7 @@ class TransferService : Service() {
     return NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(R.drawable.ms_upload_file_24)
       .setContentTitle(getString(R.string.transfers))
-      .setContentText(getString(R.string.transfer_notification, active.size))
+      .setContentText(resources.getQuantityString(R.plurals.transfer_notification, active.size, active.size))
       .setOnlyAlertOnce(true)
       .setOngoing(true)
       .setProgress(100, progress, total <= 0)

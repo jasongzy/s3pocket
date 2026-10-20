@@ -16,8 +16,10 @@ import com.jasongzy.s3pocket.data.transfer.DownloadTransfer
 import com.jasongzy.s3pocket.data.transfer.TransferManager
 import com.jasongzy.s3pocket.data.transfer.TransferStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.SharingStarted
@@ -25,6 +27,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 import java.time.Instant
 
 data class ObjectDetailsUiState(
@@ -35,10 +38,11 @@ data class ObjectDetailsUiState(
   val accessUrl: String? = null,
   val isTemporaryUrl: Boolean = true,
   val previewEnabled: Boolean = true,
-  val presignedUrlExpiryMinutes: Int = 15,
   val accessUrlExpiresAt: Instant? = null,
   val isRefreshingUrl: Boolean = false,
   val isLoading: Boolean = true,
+  val isLoadingPreview: Boolean = false,
+  val previewError: String? = null,
   val isDownloading: Boolean = false,
   val downloadComplete: Boolean = false,
   val downloadProgress: Float? = null,
@@ -55,8 +59,10 @@ class ObjectDetailsViewModel(
   private val storageFactory: StorageFactory,
   private val transferManager: TransferManager,
 ) : ViewModel() {
+  private var loadJob: Job? = null
+  private var urlJob: Job? = null
   private var currentKey = key
-  private var downloadId: String? = null
+  private val downloadId = MutableStateFlow<String?>(null)
   private val _state = MutableStateFlow(ObjectDetailsUiState())
   val state: StateFlow<ObjectDetailsUiState> = _state
   val favorites: StateFlow<List<FavoriteItem>> =
@@ -65,13 +71,14 @@ class ObjectDetailsViewModel(
   init {
     load()
     viewModelScope.launch {
-      transferManager.items.collect { transfers ->
-        val transfer = transfers.firstOrNull { it.id == downloadId } ?: return@collect
+      transferManager.items.combine(downloadId) { transfers, id -> transfers.firstOrNull { it.id == id } }.collect { transfer ->
+        if (transfer == null) return@collect
         when (transfer.status) {
           TransferStatus.QUEUED, TransferStatus.RUNNING -> _state.update {
             it.copy(
               isDownloading = true,
-              downloadProgress = transfer.completedBytes.toFloat() / transfer.totalBytes.coerceAtLeast(1),
+              downloadError = null,
+              downloadProgress = (transfer.completedBytes.toFloat() / transfer.totalBytes.coerceAtLeast(1)).coerceIn(0f, 1f),
             )
           }
           TransferStatus.COMPLETED -> _state.update {
@@ -84,17 +91,21 @@ class ObjectDetailsViewModel(
         }
         if (transfer.status == TransferStatus.COMPLETED || transfer.status == TransferStatus.CANCELED) {
           transferManager.dismissFinished(listOf(transfer.id))
-          downloadId = null
+          downloadId.value = null
         }
       }
     }
   }
 
   fun load() {
-    viewModelScope.launch {
+    loadJob?.cancel()
+    urlJob?.cancel()
+    loadJob = viewModelScope.launch {
       val startedAt = SystemClock.elapsedRealtime()
       AppLog.debug(TAG) { "LoadObjectDetails started" }
-      _state.update { it.copy(isLoading = true, error = null) }
+      _state.update {
+        it.copy(isLoading = true, isLoadingPreview = false, isRefreshingUrl = false, error = null, previewError = null)
+      }
       runSuspendCatching {
           val profile = profiles.get(profileId)
           val storage = storageFactory.create(profile)
@@ -104,40 +115,33 @@ class ObjectDetailsViewModel(
           val expiryMinutes = appSettings.presignedUrlExpiryMinutes
           val publicUrl = profile.publicObjectUrl(bucket, currentKey)
           val accessUrl = publicUrl ?: storage.createPreviewUrl(bucket, currentKey, expiryMinutes)
-          val textPreview = if (previewEnabled && details.isText() && details.size <= TEXT_PREVIEW_MAX_BYTES) {
-            withContext(Dispatchers.IO) {
-              ByteArrayOutputStream(details.size.toInt()).use { output ->
-                storage.download(bucket, currentKey, output)
-                output.toString(Charsets.UTF_8.name())
-              }
-            }
-          } else null
-          DetailsLoadResult(
-            details = details,
-            imagePreviewUrl = accessUrl.takeIf { previewEnabled && details.isImage() },
-            textPreview = textPreview,
-            videoPreviewUrl = accessUrl.takeIf { previewEnabled && details.isVideo() && details.size <= VIDEO_PREVIEW_MAX_BYTES },
-            accessUrl = accessUrl,
-            isTemporaryUrl = publicUrl == null,
-            previewEnabled = previewEnabled,
-            presignedUrlExpiryMinutes = expiryMinutes,
-            accessUrlExpiresAt = Instant.now().plusSeconds(expiryMinutes * 60L).takeIf { publicUrl == null },
-          )
-        }
-        .onSuccess { result ->
+          val loadText = previewEnabled && details.isText() && details.size <= TEXT_PREVIEW_MAX_BYTES
+          _state.update {
+            it.copy(
+              details = details,
+              previewUrl = accessUrl.takeIf { previewEnabled && details.isImage() },
+              textPreview = null,
+              videoPreviewUrl = accessUrl.takeIf { previewEnabled && details.isVideo() && details.size <= VIDEO_PREVIEW_MAX_BYTES },
+              accessUrl = accessUrl,
+              isTemporaryUrl = publicUrl == null,
+              previewEnabled = previewEnabled,
+              accessUrlExpiresAt = Instant.now().plusSeconds(expiryMinutes * 60L).takeIf { publicUrl == null },
+              isLoading = false,
+              isLoadingPreview = loadText,
+            )
+          }
           AppLog.debug(TAG) { "LoadObjectDetails succeeded in ${SystemClock.elapsedRealtime() - startedAt} ms" }
-          _state.value = ObjectDetailsUiState(
-            details = result.details,
-            previewUrl = result.imagePreviewUrl,
-            textPreview = result.textPreview,
-            videoPreviewUrl = result.videoPreviewUrl,
-            accessUrl = result.accessUrl,
-            isTemporaryUrl = result.isTemporaryUrl,
-            previewEnabled = result.previewEnabled,
-            presignedUrlExpiryMinutes = result.presignedUrlExpiryMinutes,
-            accessUrlExpiresAt = result.accessUrlExpiresAt,
-            isLoading = false,
-          )
+          if (loadText) {
+            runSuspendCatching {
+              withContext(Dispatchers.IO) {
+                readTextPreview { storage.download(bucket, currentKey, it, decodeContentEncoding = true) }
+              }
+            }.onSuccess { text ->
+              _state.update { it.copy(textPreview = text, isLoadingPreview = false) }
+            }.onFailure { error ->
+              _state.update { it.copy(previewError = error.userMessage(), isLoadingPreview = false) }
+            }
+          }
         }
         .onFailure { error ->
           AppLog.error(TAG, error) { "LoadObjectDetails failed in ${SystemClock.elapsedRealtime() - startedAt} ms" }
@@ -147,8 +151,8 @@ class ObjectDetailsViewModel(
   }
 
   fun refreshAccessUrl(onRefreshed: () -> Unit) {
-    if (!_state.value.isTemporaryUrl || _state.value.isRefreshingUrl) return
-    viewModelScope.launch {
+    if (!_state.value.isTemporaryUrl || _state.value.isRefreshingUrl || _state.value.isLoading) return
+    urlJob = viewModelScope.launch {
       _state.update { it.copy(isRefreshingUrl = true, error = null) }
       runSuspendCatching {
           val profile = profiles.get(profileId)
@@ -161,7 +165,6 @@ class ObjectDetailsViewModel(
               accessUrl = url,
               previewUrl = url.takeIf { current.previewUrl != null },
               videoPreviewUrl = url.takeIf { current.videoPreviewUrl != null },
-              presignedUrlExpiryMinutes = expiryMinutes,
               accessUrlExpiresAt = Instant.now().plusSeconds(expiryMinutes * 60L),
               isRefreshingUrl = false,
             )
@@ -173,25 +176,25 @@ class ObjectDetailsViewModel(
   }
 
   fun download(uri: Uri) {
+    if (_state.value.isDownloading) return
     val details = _state.value.details ?: return
+    downloadId.value?.let { transferManager.dismissFinished(listOf(it)) }
     _state.update {
       it.copy(isDownloading = true, downloadComplete = false, downloadProgress = 0f, downloadError = null, error = null)
     }
-    downloadId = transferManager.enqueueDownload(DownloadTransfer(profileId, bucket, uri, currentKey, details.size))
+    downloadId.value = transferManager.enqueueDownload(DownloadTransfer(profileId, bucket, uri, currentKey, details.size))
   }
 
   fun cancelDownload() {
-    downloadId?.let(transferManager::cancel)
+    downloadId.value?.let(transferManager::cancel)
   }
 
   fun retryDownload() {
-    downloadId?.let(transferManager::retry)
-    _state.update { it.copy(isDownloading = true, downloadError = null) }
+    downloadId.value?.let(transferManager::retry)
   }
 
   override fun onCleared() {
-    downloadId?.let { transferManager.dismissFinished(listOf(it)) }
-    super.onCleared()
+    downloadId.value?.let { transferManager.release(listOf(it)) }
   }
 
   fun update(
@@ -202,9 +205,11 @@ class ObjectDetailsViewModel(
     metadata: Map<String, String>,
     onSaved: (String) -> Unit,
   ) {
-    if (state.value.details == null) return
+    if (state.value.details == null || state.value.isLoading) return
+    loadJob?.cancel()
+    urlJob?.cancel()
     viewModelScope.launch {
-      _state.update { it.copy(isLoading = true, error = null) }
+      _state.update { it.copy(isLoading = true, isLoadingPreview = false, isRefreshingUrl = false, error = null) }
       runSuspendCatching {
           val profile = profiles.get(profileId)
           storageFactory.create(profile).updateObject(
@@ -218,6 +223,9 @@ class ObjectDetailsViewModel(
               metadata = metadata,
             ),
           )
+          if (currentKey != targetKey) {
+            profiles.moveFavorites(profileId, bucket, currentKey, targetKey, isPrefix = false)
+          }
         }
         .onSuccess {
           val oldKey = currentKey
@@ -240,17 +248,23 @@ class ObjectDetailsViewModel(
   }
 }
 
-private data class DetailsLoadResult(
-  val details: ObjectDetails,
-  val imagePreviewUrl: String?,
-  val textPreview: String?,
-  val videoPreviewUrl: String?,
-  val accessUrl: String,
-  val isTemporaryUrl: Boolean,
-  val previewEnabled: Boolean,
-  val presignedUrlExpiryMinutes: Int,
-  val accessUrlExpiresAt: Instant?,
-)
+internal suspend fun readTextPreview(download: suspend (OutputStream) -> Unit): String {
+  val output = object : ByteArrayOutputStream() {
+    override fun write(value: Int) {
+      check(count < TEXT_PREVIEW_MAX_BYTES) { "Text preview exceeds the size limit" }
+      super.write(value)
+    }
+
+    override fun write(bytes: ByteArray, offset: Int, length: Int) {
+      check(count.toLong() + length <= TEXT_PREVIEW_MAX_BYTES) { "Text preview exceeds the size limit" }
+      super.write(bytes, offset, length)
+    }
+  }
+  return output.use {
+    download(it)
+    it.toString(Charsets.UTF_8.name())
+  }
+}
 
 fun ObjectDetails.isImage(): Boolean =
   contentType?.startsWith("image/") == true ||

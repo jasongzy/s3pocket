@@ -11,6 +11,7 @@ kotlin = "2.4.21"
 nav3Core = "1.0.1"
 lifecycleViewmodelNav3 = "2.11.0"
 awsSdk = "1.9.21"
+smithyRuntime = "1.7.11"
 coil = "3.5.0"
 composeHighlight = "0.32.0"
 dataStore = "1.2.1"
@@ -39,6 +40,7 @@ androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", vers
 androidx-lifecycle-viewmodel-navigation3 = { module = "androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "lifecycleViewmodelNav3" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "dataStore" }
 aws-s3 = { module = "aws.sdk.kotlin:s3", version.ref = "awsSdk" }
+smithy-http-client-okhttp = { module = "aws.smithy.kotlin:http-client-engine-okhttp", version.ref = "smithyRuntime" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 compose-highlight = { module = "dev.hossain:compose-highlight", version.ref = "composeHighlight" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }

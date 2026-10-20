@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -63,12 +64,14 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
-import coil3.compose.AsyncImage
+import coil3.compose.SubcomposeAsyncImage
 import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.SettingsRepository
@@ -138,8 +141,8 @@ fun ObjectDetailsScreen(
     }
   ) { padding ->
     when {
-      state.isLoading -> LoadingPane(padding)
-      state.error != null ->
+      state.isLoading && state.details == null -> LoadingPane(padding)
+      state.error != null && state.details == null ->
         MessagePane(
           stringResource(R.string.object_load_error),
           state.error.orEmpty(),
@@ -149,19 +152,8 @@ fun ObjectDetailsScreen(
         )
       state.details != null ->
         DetailsContent(
-          details = state.details!!,
-          previewUrl = state.previewUrl,
-          textPreview = state.textPreview,
-          videoPreviewUrl = state.videoPreviewUrl,
-          isDownloading = state.isDownloading,
-          downloadComplete = state.downloadComplete,
-          downloadProgress = state.downloadProgress,
-          downloadError = state.downloadError,
-          accessUrl = state.accessUrl,
-          isTemporaryUrl = state.isTemporaryUrl,
-          previewEnabled = state.previewEnabled,
-          accessUrlExpiresAt = state.accessUrlExpiresAt,
-          isRefreshingUrl = state.isRefreshingUrl,
+          state = state,
+          onReload = viewModel::load,
           onRefreshUrl = { viewModel.refreshAccessUrl { context.showSignedUrlRefreshedToast() } },
           onDownload = { download.launch(fileName) },
           onCancelDownload = viewModel::cancelDownload,
@@ -185,36 +177,43 @@ fun ObjectDetailsScreen(
 
 @Composable
 private fun DetailsContent(
-  details: ObjectDetails,
-  previewUrl: String?,
-  textPreview: String?,
-  videoPreviewUrl: String?,
-  isDownloading: Boolean,
-  downloadComplete: Boolean,
-  downloadProgress: Float?,
-  downloadError: String?,
-  accessUrl: String?,
-  isTemporaryUrl: Boolean,
-  previewEnabled: Boolean,
-  accessUrlExpiresAt: Instant?,
-  isRefreshingUrl: Boolean,
+  state: ObjectDetailsUiState,
+  onReload: () -> Unit,
   onRefreshUrl: () -> Unit,
   onDownload: () -> Unit,
   onCancelDownload: () -> Unit,
   onRetryDownload: () -> Unit,
   onEdit: () -> Unit,
   modifier: Modifier = Modifier,
-) {
+) = with(state) {
+  val details = requireNotNull(details)
   Column(
     modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
     verticalArrangement = Arrangement.spacedBy(16.dp),
   ) {
+    if (isLoading || isLoadingPreview) {
+      LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    }
+    (error ?: previewError)?.let { message ->
+      SelectionContainer { Text(message, color = MaterialTheme.colorScheme.error) }
+      TextButton(onClick = onReload, enabled = !isLoading) { Text(stringResource(R.string.try_again)) }
+    }
     if (previewUrl != null) {
-      AsyncImage(
-        model = previewUrl,
+      SubcomposeAsyncImage(
+        model = rememberObjectImageRequest(previewUrl, details.etag, details.lastModified),
         contentDescription = details.key.substringAfterLast('/'),
         modifier = Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(RoundedCornerShape(20.dp)),
         contentScale = ContentScale.Fit,
+        loading = { LoadingPane(PaddingValues()) },
+        error = { error ->
+          MessagePane(
+            stringResource(R.string.image_preview_error),
+            error.result.throwable.userMessage(),
+            PaddingValues(),
+            stringResource(R.string.try_again),
+            painter::restart,
+          )
+        },
       )
     }
     if (videoPreviewUrl != null) {
@@ -264,7 +263,7 @@ private fun DetailsContent(
       }
     }
 
-    Button(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
+    Button(onClick = onEdit, enabled = !isLoading, modifier = Modifier.fillMaxWidth()) {
       AppIcon(R.drawable.ms_edit_24, null, Modifier.size(18.dp))
       Spacer(Modifier.size(8.dp))
       Text(stringResource(R.string.modify))
@@ -401,6 +400,7 @@ private fun TextLayoutResult.visualLineNumbers(code: String): String {
 private fun SignedUrlExpiry(expiresAt: Instant?) {
   if (expiresAt == null) return
   val remainingSeconds by produceState(remainingSeconds(expiresAt), expiresAt) {
+    value = remainingSeconds(expiresAt)
     while (value > 0L) {
       delay(1_000)
       value = remainingSeconds(expiresAt)
@@ -432,28 +432,28 @@ private fun VideoPreview(url: String) {
     }
   }
   DisposableEffect(player) { onDispose { player.release() } }
+  LifecycleEventEffect(Lifecycle.Event.ON_STOP) { player.pause() }
   if (fullscreen) {
     FullscreenVideoPlayer(player, onFullscreenChange = { fullscreen = it })
   } else {
-    PlayerSurface(player, onFullscreenChange = { fullscreen = it }, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+    PlayerSurface(player, false, onFullscreenChange = { fullscreen = it }, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
   }
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun PlayerSurface(player: ExoPlayer, onFullscreenChange: (Boolean) -> Unit, modifier: Modifier) {
+private fun PlayerSurface(player: ExoPlayer, fullscreen: Boolean, onFullscreenChange: (Boolean) -> Unit, modifier: Modifier) {
   AndroidView(
     factory = { viewContext ->
       PlayerView(viewContext).apply {
-        this.player = player
         setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
-        setFullscreenButtonClickListener(onFullscreenChange)
         keepScreenOn = true
       }
     },
     update = {
       it.player = player
       it.setFullscreenButtonClickListener(onFullscreenChange)
+      it.setFullscreenButtonState(fullscreen)
     },
     onRelease = { it.player = null },
     modifier = modifier,
@@ -487,6 +487,7 @@ private fun FullscreenVideoPlayer(player: ExoPlayer, onFullscreenChange: (Boolea
     }
     PlayerSurface(
       player = player,
+      fullscreen = true,
       onFullscreenChange = onFullscreenChange,
       modifier = Modifier.fillMaxSize().background(Color.Black),
     )

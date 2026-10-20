@@ -5,6 +5,7 @@ import com.jasongzy.s3pocket.data.model.StorageProvider
 import com.jasongzy.s3pocket.data.model.ProfileError
 import com.jasongzy.s3pocket.ui.ProfileFormState
 import com.jasongzy.s3pocket.ui.PublicUrlEntry
+import com.jasongzy.s3pocket.ui.parseDownloadUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -30,6 +31,14 @@ class StorageProfileTest {
     assertEquals("https://storage.example.com", s3.endpointUrl)
     assertEquals("us-east-1", s3.regionName)
     assertEquals(true, s3.forcePathStyle)
+  }
+
+  @Test
+  fun downloadsRequireHttpsButAllowSignedUrlQueries() {
+    listOf("http://example.com/file", "https://user:pass@example.com/file", "not a URL").forEach {
+      assertNull(parseDownloadUrl(it))
+    }
+    assertEquals("https://example.com/file?token=abc", parseDownloadUrl(" https://example.com/file?token=abc ")?.toString())
   }
 
   @Test

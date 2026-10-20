@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -35,7 +34,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.DropdownMenu
@@ -51,29 +49,29 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil3.compose.AsyncImage
 import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.GalleryImageScale
 import com.jasongzy.s3pocket.data.GalleryThumbnailSize
@@ -90,18 +88,18 @@ import com.jasongzy.s3pocket.data.storage.StorageFactory
 import com.jasongzy.s3pocket.data.storage.ThumbnailUrlRepository
 import com.jasongzy.s3pocket.data.transfer.TransferManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private data class SelectedDocument(
+internal data class SelectedDocument(
   val uri: Uri,
   val name: String,
   val contentType: String,
   val size: Long,
   val sourceUrl: String? = null,
 )
-
-private data class MetadataEntry(val key: String = "", val value: String = "")
 
 private data class PendingUpload(
   val document: SelectedDocument,
@@ -133,7 +131,7 @@ fun ObjectsScreen(
   onNavigateToPrefix: (String) -> Unit,
   sharedUris: List<Uri>,
   openSharedImmediately: Boolean,
-  onSharedUrisConsumed: () -> Unit,
+  onSharedUrisConsumed: () -> Boolean,
 ) {
   val context = LocalContext.current
   val haptic = LocalHapticFeedback.current
@@ -146,16 +144,20 @@ fun ObjectsScreen(
       repository,
       settingsRepository,
       storageFactory,
-      context.contentResolver,
-      context.cacheDir,
       transferManager,
     )
   }
   val state by viewModel.state.collectAsStateWithLifecycle()
+  LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
+  val stagingSession = remember(transferManager) { transferManager.staging.openSession() }
+  DisposableEffect(stagingSession) {
+    onDispose { stagingSession.close() }
+  }
   val favorites by viewModel.favorites.collectAsStateWithLifecycle()
   val metadataTemplate = settings.metadataTemplate
   var selected by remember { mutableStateOf<SelectedDocument?>(null) }
   var sharedDocuments by remember { mutableStateOf<List<SelectedDocument>?>(null) }
+  var openSharedRequested by remember(sharedUris) { mutableStateOf(false) }
   var selectionError by remember { mutableStateOf<String?>(null) }
   var isScanningFolder by remember { mutableStateOf(false) }
   var selectedKeys by remember(prefix) { mutableStateOf(emptySet<String>()) }
@@ -164,6 +166,18 @@ fun ObjectsScreen(
   var movingItems by remember { mutableStateOf<List<ObjectItem>?>(null) }
   var pendingUpload by remember { mutableStateOf<PendingUpload?>(null) }
   var pendingBatchUpload by remember { mutableStateOf<PendingBatchUpload?>(null) }
+  var uploadCheck by remember { mutableStateOf<Job?>(null) }
+  fun checkUpload(action: suspend () -> Unit) {
+    if (uploadCheck != null) return
+    uploadCheck = scope.launch(start = CoroutineStart.LAZY) {
+      try {
+        runSuspendCatching { action() }.onFailure { selectionError = it.userMessage() }
+      } finally {
+        uploadCheck = null
+      }
+    }
+    uploadCheck?.start()
+  }
   val sort = settings.objectSort
   val ascending = settings.objectSortAscending
   val viewMode = settings.objectViewMode
@@ -173,8 +187,8 @@ fun ObjectsScreen(
   var showGalleryOptions by remember { mutableStateOf(false) }
   var showUploadSources by remember { mutableStateOf(false) }
   var showUrlUpload by remember { mutableStateOf(false) }
-  var searchActive by remember(prefix) { mutableStateOf(false) }
-  var query by remember(prefix) { mutableStateOf("") }
+  var searchActive by rememberSaveable(prefix) { mutableStateOf(false) }
+  var query by rememberSaveable(prefix) { mutableStateOf("") }
   val searchFocusRequester = remember { FocusRequester() }
   var showPathMenu by remember { mutableStateOf(false) }
   fun closeSearch() {
@@ -190,6 +204,9 @@ fun ObjectsScreen(
     state.objects.filter { it.name.contains(query.trim(), ignoreCase = true) }.sortedWith(
       compareByDescending<ObjectItem> { it.isFolder }.then(if (ascending) comparator else comparator.reversed())
     )
+  }
+  LaunchedEffect(displayedObjects) {
+    selectedKeys = selectedKeys.intersect(displayedObjects.mapTo(mutableSetOf()) { it.key })
   }
   LaunchedEffect(query, sort, ascending, state.nextContinuationToken) {
     viewModel.setCompleteListingRequired(
@@ -214,9 +231,11 @@ fun ObjectsScreen(
   }
   val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
     if (uri != null) {
-      runCatching { context.contentResolver.document(uri, unknownFileSize) }
-        .onSuccess { selected = it }
-        .onFailure { selectionError = it.userMessage() }
+      scope.launch {
+        runSuspendCatching { context.contentResolver.document(uri, unknownFileSize) }
+          .onSuccess { selected = it }
+          .onFailure { selectionError = it.userMessage() }
+      }
     }
   }
   val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -226,7 +245,9 @@ fun ObjectsScreen(
       }
       scope.launch {
         isScanningFolder = true
-        runSuspendCatching { SafTreeScanner(context.contentResolver, context.cacheDir).scan(uri) }
+        runSuspendCatching {
+          SafTreeScanner(context.contentResolver, stagingSession::create).scan(uri)
+        }
           .onSuccess { files ->
             sharedDocuments = files.map { SelectedDocument(it.uri, it.relativePath, it.contentType, it.size) }
           }
@@ -235,21 +256,14 @@ fun ObjectsScreen(
       }
     }
   }
-  fun openSharedFiles() {
-    if (sharedUris.isEmpty()) return
-    scope.launch {
-      val results = withContext(Dispatchers.IO) {
-        sharedUris.map { uri -> runCatching { context.contentResolver.document(uri, unknownFileSize) } }
-      }
-      results.firstOrNull { it.isFailure }?.exceptionOrNull()?.let { selectionError = it.userMessage() }
-      val documents = results.mapNotNull(Result<SelectedDocument>::getOrNull)
-      if (documents.size == 1) selected = documents.first()
-      else if (documents.isNotEmpty()) sharedDocuments = documents
-      onSharedUrisConsumed()
-    }
-  }
-  LaunchedEffect(sharedUris, openSharedImmediately) {
-    if (sharedUris.isNotEmpty() && openSharedImmediately) openSharedFiles()
+  LaunchedEffect(sharedUris, openSharedImmediately, openSharedRequested) {
+    if (sharedUris.isEmpty() || !(openSharedImmediately || openSharedRequested)) return@LaunchedEffect
+    val results = sharedUris.map { uri -> runSuspendCatching { context.contentResolver.document(uri, unknownFileSize) } }
+    if (!onSharedUrisConsumed()) return@LaunchedEffect
+    results.firstOrNull { it.isFailure }?.exceptionOrNull()?.let { selectionError = it.userMessage() }
+    val documents = results.mapNotNull(Result<SelectedDocument>::getOrNull)
+    if (documents.size == 1) selected = documents.first()
+    else if (documents.isNotEmpty()) sharedDocuments = documents
   }
   state.deletedCount?.let { count ->
     val message = pluralStringResource(R.plurals.deleted_count, count, count)
@@ -259,22 +273,30 @@ fun ObjectsScreen(
       viewModel.consumeDeletedCount()
     }
   }
-  state.uploadedCount?.let { count ->
-    val message = pluralStringResource(R.plurals.uploaded_count, count, count)
-    LaunchedEffect(count) {
+  state.uploadResult?.let { result ->
+    val message = if (result.completed == result.total) {
+      pluralStringResource(R.plurals.uploaded_count, result.completed, result.completed)
+    } else {
+      pluralStringResource(R.plurals.operation_canceled_progress, result.total, result.completed, result.total)
+    }
+    LaunchedEffect(result) {
       Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-      viewModel.consumeUploadedCount()
+      viewModel.consumeUploadResult()
     }
   }
   if (state.deleteCanceled) {
-    val message = stringResource(R.string.deletion_canceled)
+    val message = state.partialProgress?.let {
+      pluralStringResource(R.plurals.operation_canceled_progress, it.total, it.completed, it.total)
+    } ?: stringResource(R.string.deletion_canceled)
     LaunchedEffect(Unit) {
       Toast.makeText(context, message, Toast.LENGTH_LONG).show()
       viewModel.consumeDeleteCanceled()
     }
   }
   if (state.moveCanceled) {
-    val message = stringResource(R.string.move_canceled)
+    val message = state.partialProgress?.let {
+      pluralStringResource(R.plurals.operation_canceled_progress, it.total, it.completed, it.total)
+    } ?: stringResource(R.string.move_canceled)
     LaunchedEffect(Unit) {
       Toast.makeText(context, message, Toast.LENGTH_LONG).show()
       viewModel.consumeMoveCanceled()
@@ -438,12 +460,12 @@ fun ObjectsScreen(
               }
             }
           } else {
-            val selectedItems = state.objects.filter { it.key in selectedKeys }
+            val selectedItems = displayedObjects.filter { it.key in selectedKeys }
             val selectedFavorites = selectedItems.map { it.favorite(profileId, bucket) }
             val allFavorite = selectedFavorites.isNotEmpty() && selectedFavorites.all { candidate ->
               favorites.any { it.id == candidate.id }
             }
-            TextButton(onClick = { selectedKeys = state.objects.map { it.key }.toSet() }) {
+            TextButton(onClick = { selectedKeys = displayedObjects.mapTo(mutableSetOf()) { it.key } }) {
               Text(stringResource(R.string.select_all))
             }
             TooltipIconButton(
@@ -461,7 +483,7 @@ fun ObjectsScreen(
             ) {
               AppIcon(R.drawable.ms_drive_file_move_24, null)
             }
-            TooltipIconButton(stringResource(R.string.delete), { deletingItems = state.objects.filter { it.key in selectedKeys } }) {
+            TooltipIconButton(stringResource(R.string.delete), { deletingItems = selectedItems }) {
               AppIcon(R.drawable.ms_delete_24, null)
             }
           }
@@ -510,8 +532,10 @@ fun ObjectsScreen(
             modifier = Modifier.weight(1f),
             color = MaterialTheme.colorScheme.onSecondaryContainer,
           )
-          TextButton(onClick = ::openSharedFiles) { Text(stringResource(R.string.upload_here)) }
-          TooltipIconButton(stringResource(R.string.cancel), onSharedUrisConsumed) {
+          TextButton(onClick = { openSharedRequested = true }, enabled = !openSharedRequested) {
+            Text(stringResource(R.string.upload_here))
+          }
+          TooltipIconButton(stringResource(R.string.cancel), { onSharedUrisConsumed() }) {
             AppIcon(R.drawable.ms_close_24, null)
           }
         }
@@ -534,44 +558,49 @@ fun ObjectsScreen(
         )
       } else if (state.isUploading || state.isWorking || state.isDownloadingSource || isScanningFolder) {
         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-      } else if (state.isScanning) {
+      } else if (state.showListingProgress) {
         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         Text(
-          stringResource(R.string.searching_items, state.objects.size),
+          pluralStringResource(R.plurals.loading_items, state.objects.size, state.objects.size),
           modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
           style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
-      when {
-        state.isLoading && state.objects.isEmpty() -> LoadingPane(PaddingValues())
-        state.error != null || state.errorRes != null ->
-          MessagePane(
-            stringResource(R.string.storage_request_failed),
-            state.errorRes?.let { stringResource(it) } ?: state.error.orEmpty(),
-            PaddingValues(),
-            stringResource(R.string.dismiss),
-            viewModel::clearError,
-          )
-        state.objects.isEmpty() ->
-          MessagePane(
-            stringResource(R.string.empty_folder),
-            stringResource(R.string.empty_folder_description),
-            PaddingValues(),
-          )
-        displayedObjects.isEmpty() && state.isScanning -> LoadingPane(PaddingValues())
-        displayedObjects.isEmpty() ->
-          MessagePane(
-            stringResource(R.string.no_search_results),
-            query,
-            PaddingValues(),
-          )
-        viewMode == ObjectViewMode.GALLERY -> PullToRefreshBox(
-          isRefreshing = state.isLoading,
-          onRefresh = viewModel::refresh,
-          modifier = Modifier.fillMaxSize(),
-        ) {
-          LazyVerticalGrid(
+      PullToRefreshBox(
+        isRefreshing = state.isLoading && state.objects.isNotEmpty(),
+        onRefresh = viewModel::refresh,
+        modifier = Modifier.fillMaxSize(),
+      ) {
+        when {
+          state.objects.isEmpty() && (state.isLoading || state.isLoadingAll) -> LoadingPane(PaddingValues())
+          state.error != null || state.errorRes != null ->
+            MessagePane(
+              stringResource(R.string.storage_request_failed),
+              listOfNotNull(
+                state.partialProgress?.let {
+                  stringResource(R.string.operation_partial_failure, it.completed, it.total)
+                },
+                state.errorRes?.let { stringResource(it) } ?: state.error,
+              ).joinToString("\n\n"),
+              PaddingValues(),
+              stringResource(R.string.refresh),
+              viewModel::refresh,
+            )
+          state.objects.isEmpty() ->
+            MessagePane(
+              stringResource(R.string.empty_folder),
+              stringResource(R.string.empty_folder_description),
+              PaddingValues(),
+            )
+          displayedObjects.isEmpty() && state.isLoadingAll -> LoadingPane(PaddingValues())
+          displayedObjects.isEmpty() ->
+            MessagePane(
+              stringResource(R.string.no_search_results),
+              query,
+              PaddingValues(),
+            )
+          viewMode == ObjectViewMode.GALLERY -> LazyVerticalGrid(
             columns = GridCells.Fixed(galleryThumbnailSize.columns),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(8.dp),
@@ -594,7 +623,7 @@ fun ObjectsScreen(
                 },
               )
             }
-            if (state.nextContinuationToken != null && !state.isScanning) {
+            if (state.nextContinuationToken != null && !state.isLoadingAll) {
               item(key = "load-more-${state.nextContinuationToken}") {
                 LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -602,13 +631,7 @@ fun ObjectsScreen(
             }
             item { Spacer(Modifier.size(88.dp)) }
           }
-        }
-        else -> PullToRefreshBox(
-          isRefreshing = state.isLoading,
-          onRefresh = viewModel::refresh,
-          modifier = Modifier.fillMaxSize(),
-        ) {
-          LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          else -> LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             items(displayedObjects, key = { it.key }) { item ->
               ObjectRow(
                 item = item,
@@ -628,7 +651,7 @@ fun ObjectsScreen(
                 },
               )
             }
-            if (state.nextContinuationToken != null && !state.isScanning) {
+            if (state.nextContinuationToken != null && !state.isLoadingAll) {
               item(key = "load-more-${state.nextContinuationToken}") {
                 LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
@@ -656,17 +679,22 @@ fun ObjectsScreen(
       document = document,
       initialKey = prefix + document.name,
       isUploading = state.isUploading,
-      initialMetadata = metadataTemplate.filterKeys { !it.equals("source-url", true) } +
-        document.sourceUrl?.let { mapOf("source-url" to it) }.orEmpty(),
-      onDismiss = { if (!state.isUploading) selected = null },
-      onUpload = { key, type, metadata ->
-        val upload = PendingUpload(document, key, type, metadata)
-        if (state.objects.any { !it.isFolder && it.key == key }) {
-          pendingUpload = upload
-        } else {
-          viewModel.upload(document.uri, key, type, document.size, metadata)
+      initialMetadata = uploadMetadata(metadataTemplate, document.sourceUrl),
+      onDismiss = {
+        if (!state.isUploading) {
+          transferManager.staging.discard(document.uri)
+          selected = null
         }
-        selected = null
+      },
+      onUpload = { key, type, metadata ->
+        checkUpload {
+          if (viewModel.hasUploadConflicts(listOf(key))) {
+            pendingUpload = PendingUpload(document, key, type, metadata)
+          } else {
+            viewModel.upload(document.uri, key, type, document.size, metadata)
+          }
+          selected = null
+        }
       },
     )
   }
@@ -674,17 +702,23 @@ fun ObjectsScreen(
     BatchUploadDialog(
       documents = documents,
       isUploading = state.isUploading,
-      initialMetadata = metadataTemplate.filterKeys { !it.equals("source-url", true) },
-      onDismiss = { if (!state.isUploading) sharedDocuments = null },
-      onUpload = { metadata ->
-        val keys = documents.map { prefix + it.name }
-        val hasConflicts = keys.distinct().size != keys.size || keys.any { key -> state.objects.any { !it.isFolder && it.key == key } }
-        if (hasConflicts) {
-          pendingBatchUpload = PendingBatchUpload(documents, metadata)
-        } else {
-          viewModel.uploadBatch(documents.toBatchUploadItems(prefix, metadata, emptySet(), autoRename = false))
+      initialMetadata = metadataTemplate,
+      onDismiss = {
+        if (!state.isUploading) {
+          transferManager.staging.discard(documents.map(SelectedDocument::uri))
+          sharedDocuments = null
         }
-        sharedDocuments = null
+      },
+      onUpload = { metadata ->
+        checkUpload {
+          val keys = documents.map { prefix + it.name }
+          if (viewModel.hasUploadConflicts(keys)) {
+            pendingBatchUpload = PendingBatchUpload(documents, metadata)
+          } else {
+            viewModel.uploadBatch(documents.toBatchUploadItems(keys, metadata))
+          }
+          sharedDocuments = null
+        }
       },
     )
   }
@@ -692,19 +726,11 @@ fun ObjectsScreen(
     TextInputDialog(
       title = stringResource(R.string.upload_from_url),
       label = stringResource(R.string.source_url),
-      initialValue = context.clipboardHttpUrl().orEmpty(),
+      initialValue = context.clipboardHttpsUrl().orEmpty(),
       supportingText = stringResource(R.string.url_download_description),
       confirmLabel = stringResource(R.string.download_and_upload),
       onDismiss = { showUrlUpload = false },
       onConfirm = { url -> showUrlUpload = false; viewModel.downloadSource(url) },
-    )
-  }
-  selectionError?.let { error ->
-    AlertDialog(
-      onDismissRequest = { selectionError = null },
-      title = { Text(stringResource(R.string.cannot_use_file)) },
-      text = { Text(error) },
-      confirmButton = { TextButton(onClick = { selectionError = null }) { Text(stringResource(R.string.ok)) } },
     )
   }
   if (createFolder) {
@@ -782,50 +808,90 @@ fun ObjectsScreen(
   }
   pendingUpload?.let { upload ->
     AlertDialog(
-      onDismissRequest = { pendingUpload = null },
+      onDismissRequest = {
+        transferManager.staging.discard(upload.document.uri)
+        pendingUpload = null
+      },
       title = { Text(stringResource(R.string.object_exists_title)) },
       text = { Text(stringResource(R.string.object_exists_description, upload.key)) },
       confirmButton = {
         Row {
           TextButton(onClick = {
-            val key = nextAvailableKey(upload.key, state.objects.map { it.key }.toSet())
-            viewModel.upload(upload.document.uri, key, upload.contentType, upload.document.size, upload.metadata)
-            pendingUpload = null
+            checkUpload {
+              val key = viewModel.availableUploadKeys(listOf(upload.key)).single()
+              viewModel.upload(upload.document.uri, key, upload.contentType, upload.document.size, upload.metadata)
+              pendingUpload = null
+            }
           }) { Text(stringResource(R.string.auto_rename)) }
           TextButton(onClick = {
-            viewModel.upload(upload.document.uri, upload.key, upload.contentType, upload.document.size, upload.metadata)
-            pendingUpload = null
+            checkUpload {
+              viewModel.upload(upload.document.uri, upload.key, upload.contentType, upload.document.size, upload.metadata, overwrite = true)
+              pendingUpload = null
+            }
           }) { Text(stringResource(R.string.overwrite)) }
         }
       },
-      dismissButton = { TextButton(onClick = { pendingUpload = null }) { Text(stringResource(R.string.cancel)) } },
+      dismissButton = {
+        TextButton(onClick = {
+          transferManager.staging.discard(upload.document.uri)
+          pendingUpload = null
+        }) { Text(stringResource(R.string.cancel)) }
+      },
     )
   }
   pendingBatchUpload?.let { upload ->
     AlertDialog(
-      onDismissRequest = { pendingBatchUpload = null },
+      onDismissRequest = {
+        transferManager.staging.discard(upload.documents.map(SelectedDocument::uri))
+        pendingBatchUpload = null
+      },
       title = { Text(stringResource(R.string.objects_exist_title)) },
       text = { Text(stringResource(R.string.objects_exist_description)) },
       confirmButton = {
         Row {
           TextButton(onClick = {
-            viewModel.uploadBatch(
-              upload.documents.toBatchUploadItems(
-                prefix,
-                upload.metadata,
-                state.objects.mapTo(mutableSetOf()) { it.key },
-                autoRename = true,
-              )
-            )
-            pendingBatchUpload = null
+            checkUpload {
+              val keys = viewModel.availableUploadKeys(upload.documents.map { prefix + it.name })
+              viewModel.uploadBatch(upload.documents.toBatchUploadItems(keys, upload.metadata))
+              pendingBatchUpload = null
+            }
           }) { Text(stringResource(R.string.auto_rename)) }
           TextButton(onClick = {
-            viewModel.uploadBatch(upload.documents.toBatchUploadItems(prefix, upload.metadata, emptySet(), autoRename = false))
-            pendingBatchUpload = null
+            checkUpload {
+              viewModel.uploadBatch(
+                upload.documents.toBatchUploadItems(upload.documents.map { prefix + it.name }, upload.metadata),
+                overwrite = true,
+              )
+              pendingBatchUpload = null
+            }
           }) { Text(stringResource(R.string.overwrite)) }
         }
       },
-      dismissButton = { TextButton(onClick = { pendingBatchUpload = null }) { Text(stringResource(R.string.cancel)) } },
+      dismissButton = {
+        TextButton(onClick = {
+          transferManager.staging.discard(upload.documents.map(SelectedDocument::uri))
+          pendingBatchUpload = null
+        }) { Text(stringResource(R.string.cancel)) }
+      },
+    )
+  }
+  uploadCheck?.let { job ->
+    AlertDialog(
+      onDismissRequest = { job.cancel() },
+      title = { Text(stringResource(R.string.preparing_upload)) },
+      text = { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) },
+      confirmButton = {},
+      dismissButton = {
+        TextButton(onClick = { job.cancel() }) { Text(stringResource(R.string.cancel)) }
+      },
+    )
+  }
+  selectionError?.let { error ->
+    AlertDialog(
+      onDismissRequest = { selectionError = null },
+      title = { Text(stringResource(R.string.cannot_use_file)) },
+      text = { Text(error) },
+      confirmButton = { TextButton(onClick = { selectionError = null }) { Text(stringResource(R.string.ok)) } },
     )
   }
   state.uploadProgress?.let { progress ->
@@ -852,13 +918,13 @@ fun ObjectsScreen(
         }
       },
       confirmButton = {
-        if (progress.error != null) {
+        if (progress.error != null && !progress.active) {
           TextButton(onClick = viewModel::retryUploads) { Text(stringResource(R.string.retry)) }
         }
       },
       dismissButton = {
         TextButton(onClick = viewModel::cancelUploads) {
-          Text(if (progress.error != null) stringResource(R.string.dismiss) else stringResource(R.string.cancel))
+          Text(stringResource(if (progress.active) R.string.cancel else R.string.dismiss))
         }
       },
     )
@@ -896,129 +962,24 @@ private fun CancellableOperationProgress(
   }
 }
 
-private fun ObjectItem.favorite(profileId: String, bucket: String): FavoriteItem =
-  FavoriteItem(
-    profileId = profileId,
-    bucket = bucket,
-    key = key,
-    kind = if (isFolder) FavoriteKind.FOLDER else FavoriteKind.FILE,
-  )
-
-@Composable
-private fun GalleryOptionsDialog(
-  thumbnailSize: GalleryThumbnailSize,
-  imageScale: GalleryImageScale,
-  onThumbnailSizeChange: (GalleryThumbnailSize) -> Unit,
-  onImageScaleChange: (GalleryImageScale) -> Unit,
-  onDismiss: () -> Unit,
-) {
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(stringResource(R.string.gallery_options)) },
-    text = {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.thumbnail_size), style = MaterialTheme.typography.titleSmall)
-        GalleryThumbnailSize.entries.forEach { option ->
-          Row(
-            modifier = Modifier.fillMaxWidth().clickable { onThumbnailSizeChange(option) },
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            RadioButton(selected = thumbnailSize == option, onClick = null)
-            Text(stringResource(when (option) {
-              GalleryThumbnailSize.LARGE -> R.string.thumbnail_size_large
-              GalleryThumbnailSize.MEDIUM -> R.string.thumbnail_size_medium
-              GalleryThumbnailSize.SMALL -> R.string.thumbnail_size_small
-            }))
-          }
-        }
-        Text(stringResource(R.string.image_scaling), style = MaterialTheme.typography.titleSmall)
-        GalleryImageScale.entries.forEach { option ->
-          Row(
-            modifier = Modifier.fillMaxWidth().clickable { onImageScaleChange(option) },
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            RadioButton(selected = imageScale == option, onClick = null)
-            Column {
-              Text(stringResource(if (option == GalleryImageScale.CROP) R.string.image_scale_crop else R.string.image_scale_fit))
-              Text(
-                stringResource(
-                  if (option == GalleryImageScale.CROP) R.string.image_scale_crop_description
-                  else R.string.image_scale_fit_description,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            }
-          }
-        }
-      }
-    },
-    confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) } },
-  )
-}
-
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-@Composable
-private fun GalleryObject(
-  item: ObjectItem,
-  selected: Boolean,
-  thumbnailUrl: suspend () -> String,
-  imageScale: GalleryImageScale,
-  onClick: () -> Unit,
-  onLongClick: () -> Unit,
-) {
-  val previewUrl by produceState<String?>(null, item.key) {
-    if (item.isPreviewImage()) value = runSuspendCatching { thumbnailUrl() }.getOrNull()
-  }
-  Column(
-    modifier = Modifier
-      .background(
-        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-        MaterialTheme.shapes.medium,
-      )
-      .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-      .padding(8.dp),
-  ) {
-    Box(Modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
-      if (previewUrl != null) {
-        AsyncImage(
-          model = previewUrl,
-          contentDescription = null,
-          modifier = Modifier.fillMaxSize(),
-          contentScale = if (imageScale == GalleryImageScale.CROP) ContentScale.Crop else ContentScale.Fit,
-        )
-      } else {
-        AppIcon(item.iconResource(), null, Modifier.size(42.dp), MaterialTheme.colorScheme.primary)
-      }
-    }
-    Text(item.name, maxLines = 2, modifier = Modifier.padding(top = 8.dp))
-    if (!item.isFolder) {
-      Text(formatBytes(item.size), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-  }
-}
-
 private fun List<SelectedDocument>.toBatchUploadItems(
-  prefix: String,
+  keys: List<String>,
   metadata: Map<String, String>,
-  occupiedKeys: Set<String>,
-  autoRename: Boolean,
 ): List<BatchUploadItem> {
-  val usedKeys = occupiedKeys.toMutableSet()
-  return map { document ->
-    val originalKey = prefix + document.name
-    val key = if (autoRename) nextAvailableKey(originalKey, usedKeys) else originalKey
-    usedKeys += key
+  require(keys.size == size)
+  return zip(keys) { document, key ->
     BatchUploadItem(document.uri, key, document.contentType, document.size, metadata)
   }
 }
 
-private fun pathEntries(bucket: String, prefix: String): List<Pair<String, String>> {
+internal fun pathEntries(bucket: String, prefix: String): List<Pair<String, String>> {
   val entries = mutableListOf(bucket to "")
-  var current = ""
-  prefix.removeSuffix("/").split('/').filter { it.isNotEmpty() }.forEach { segment ->
-    current += "$segment/"
-    entries += segment to current
+  var start = 0
+  prefix.forEachIndexed { index, char ->
+    if (char == '/') {
+      entries += prefix.substring(start, index).ifEmpty { "/" } to prefix.substring(0, index + 1)
+      start = index + 1
+    }
   }
   return entries
 }
@@ -1059,130 +1020,6 @@ private fun ObjectRow(item: ObjectItem, selected: Boolean, onClick: () -> Unit, 
 }
 
 @Composable
-private fun UploadDialog(
-  document: SelectedDocument,
-  initialKey: String,
-  isUploading: Boolean,
-  initialMetadata: Map<String, String>,
-  onDismiss: () -> Unit,
-  onUpload: (String, String, Map<String, String>) -> Unit,
-) {
-  var key by remember(document.uri) { mutableStateOf(initialKey) }
-  var contentType by remember(document.uri) { mutableStateOf(document.contentType) }
-  var errorRes by remember { mutableStateOf<Int?>(null) }
-  val metadata = remember(document.uri) {
-    mutableStateListOf<MetadataEntry>().apply {
-      addAll(initialMetadata.map { MetadataEntry(it.key, it.value) })
-    }
-  }
-
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(stringResource(R.string.upload_file)) },
-    text = {
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text(stringResource(R.string.file_summary, document.name, formatBytes(document.size)), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        item {
-          OutlinedTextField(value = key, onValueChange = { key = it; errorRes = null }, label = { Text(stringResource(R.string.object_key)) }, modifier = Modifier.fillMaxWidth())
-        }
-        item {
-          OutlinedTextField(value = contentType, onValueChange = { contentType = it }, label = { Text(stringResource(R.string.content_type)) }, modifier = Modifier.fillMaxWidth())
-        }
-        item { Text(stringResource(R.string.custom_metadata), style = MaterialTheme.typography.titleSmall) }
-        items(metadata.size) { index ->
-          val entry = metadata[index]
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(value = entry.key, onValueChange = { metadata[index] = entry.copy(key = it) }, label = { Text(stringResource(R.string.metadata_key)) }, modifier = Modifier.weight(1f))
-            OutlinedTextField(value = entry.value, onValueChange = { metadata[index] = entry.copy(value = it) }, label = { Text(stringResource(R.string.metadata_value)) }, modifier = Modifier.weight(1f))
-            TooltipIconButton(stringResource(R.string.remove_metadata), { metadata.removeAt(index) }) {
-              AppIcon(R.drawable.ms_delete_24, null)
-            }
-          }
-        }
-        item { TextButton(onClick = { metadata += MetadataEntry() }) { Text(stringResource(R.string.add_metadata)) } }
-        errorRes?.let { item { Text(stringResource(it), color = MaterialTheme.colorScheme.error) } }
-      }
-    },
-    confirmButton = {
-      Button(
-        onClick = {
-          val pairs = metadata.filter { it.key.isNotBlank() }
-          when {
-            key.isBlank() || key.endsWith('/') -> errorRes = R.string.error_object_key
-            pairs.map { it.key.lowercase() }.distinct().size != pairs.size -> errorRes = R.string.error_metadata_duplicate
-            else -> onUpload(key.trimStart('/'), contentType, pairs.associate { it.key.trim() to it.value })
-          }
-        },
-        enabled = !isUploading,
-      ) { Text(stringResource(R.string.upload)) }
-    },
-    dismissButton = { TextButton(onClick = onDismiss, enabled = !isUploading) { Text(stringResource(R.string.cancel)) } },
-  )
-}
-
-@Composable
-private fun BatchUploadDialog(
-  documents: List<SelectedDocument>,
-  isUploading: Boolean,
-  initialMetadata: Map<String, String>,
-  onDismiss: () -> Unit,
-  onUpload: (Map<String, String>) -> Unit,
-) {
-  var errorRes by remember { mutableStateOf<Int?>(null) }
-  val metadata = remember(documents) {
-    mutableStateListOf<MetadataEntry>().apply {
-      addAll(initialMetadata.map { MetadataEntry(it.key, it.value) })
-    }
-  }
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(pluralStringResource(R.plurals.upload_files, documents.size, documents.size)) },
-    text = {
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(documents) { document -> Text(document.name) }
-        item { Text(stringResource(R.string.custom_metadata), style = MaterialTheme.typography.titleSmall) }
-        items(metadata.size) { index ->
-          val entry = metadata[index]
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-              value = entry.key,
-              onValueChange = { metadata[index] = entry.copy(key = it) },
-              label = { Text(stringResource(R.string.metadata_key)) },
-              modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-              value = entry.value,
-              onValueChange = { metadata[index] = entry.copy(value = it) },
-              label = { Text(stringResource(R.string.metadata_value)) },
-              modifier = Modifier.weight(1f),
-            )
-            TooltipIconButton(stringResource(R.string.remove_metadata), { metadata.removeAt(index) }) {
-              AppIcon(R.drawable.ms_delete_24, null)
-            }
-          }
-        }
-        item { TextButton(onClick = { metadata += MetadataEntry() }) { Text(stringResource(R.string.add_metadata)) } }
-        errorRes?.let { item { Text(stringResource(it), color = MaterialTheme.colorScheme.error) } }
-      }
-    },
-    confirmButton = {
-      Button(
-        onClick = {
-          val pairs = metadata.filter { it.key.isNotBlank() }
-          if (pairs.map { it.key.lowercase() }.distinct().size != pairs.size) {
-            errorRes = R.string.error_metadata_duplicate
-          } else {
-            onUpload(pairs.associate { it.key.trim() to it.value })
-          }
-        },
-        enabled = !isUploading,
-      ) { Text(stringResource(R.string.upload)) }
-    },
-    dismissButton = { TextButton(onClick = onDismiss, enabled = !isUploading) { Text(stringResource(R.string.cancel)) } },
-  )
-}
-
-@Composable
 private fun TextInputDialog(
   title: String,
   label: String,
@@ -1214,23 +1051,7 @@ private fun TextInputDialog(
 
 private fun Set<String>.toggle(key: String): Set<String> = if (key in this) this - key else this + key
 
-private fun nextAvailableKey(key: String, existing: Set<String>): String {
-  val slash = key.lastIndexOf('/')
-  val prefix = if (slash >= 0) key.substring(0, slash + 1) else ""
-  val fileName = key.substring(slash + 1)
-  val dot = fileName.lastIndexOf('.').takeIf { it > 0 } ?: fileName.length
-  val base = fileName.substring(0, dot)
-  val extension = fileName.substring(dot)
-  var number = 1
-  var candidate: String
-  do {
-    candidate = "$prefix$base ($number)$extension"
-    number++
-  } while (candidate in existing)
-  return candidate
-}
-
-private fun ObjectItem.iconResource(): Int {
+internal fun ObjectItem.iconResource(): Int {
   if (isFolder) return R.drawable.ms_folder_24
   return when (name.substringAfterLast('.', "").lowercase()) {
     "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "avif", "svg" -> R.drawable.ms_image_24
@@ -1245,27 +1066,29 @@ private fun ObjectItem.iconResource(): Int {
   }
 }
 
-private fun ObjectItem.isPreviewImage(): Boolean = !isFolder &&
+internal fun ObjectItem.isPreviewImage(): Boolean = !isFolder &&
   name.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "avif")
 
-private fun ContentResolver.document(uri: Uri, unknownSizeError: String): SelectedDocument {
+private suspend fun ContentResolver.document(uri: Uri, unknownSizeError: String): SelectedDocument = withContext(Dispatchers.IO) {
+  require(uri.scheme == ContentResolver.SCHEME_CONTENT) { "The sending app must share a content URI" }
   var name: String? = null
   var size: Long? = null
   val cursor = query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
   cursor?.use {
     if (it.moveToFirst()) {
-      name = it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
+      val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+      if (nameIndex >= 0) name = it.getString(nameIndex)
       val sizeIndex = it.getColumnIndex(OpenableColumns.SIZE)
       if (sizeIndex >= 0 && !it.isNull(sizeIndex)) size = it.getLong(sizeIndex)
     }
   }
   val length = size?.takeIf { it >= 0 } ?: openAssetFileDescriptor(uri, "r")?.use { it.length }.takeIf { it != null && it >= 0 }
   require(length != null) { unknownSizeError }
-  return SelectedDocument(uri, name ?: "upload", getType(uri) ?: "application/octet-stream", length)
+  SelectedDocument(uri, name ?: "upload", getType(uri) ?: "application/octet-stream", length)
 }
 
-private fun Context.clipboardHttpUrl(): String? {
+private fun Context.clipboardHttpsUrl(): String? {
   val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
   return clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()?.trim()
-    ?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
+    ?.takeIf { parseDownloadUrl(it) != null }
 }

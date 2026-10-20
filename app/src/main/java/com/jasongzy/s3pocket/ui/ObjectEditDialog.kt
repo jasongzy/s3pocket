@@ -1,10 +1,8 @@
 package com.jasongzy.s3pocket.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -23,8 +21,6 @@ import androidx.compose.ui.unit.dp
 import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.model.ObjectDetails
 
-private data class EditableMetadata(val key: String, val value: String)
-
 @Composable
 fun ObjectEditDialog(
   details: ObjectDetails,
@@ -37,8 +33,8 @@ fun ObjectEditDialog(
   var contentDisposition by remember(details.key) { mutableStateOf(details.contentDisposition.orEmpty()) }
   var errorRes by remember { mutableStateOf<Int?>(null) }
   val metadata = remember(details.key) {
-    mutableStateListOf<EditableMetadata>().apply {
-      addAll(details.metadata.map { EditableMetadata(it.key, it.value) })
+    mutableStateListOf<MetadataEntry>().apply {
+      addAll(details.metadata.map { MetadataEntry(it.key, it.value) })
     }
   }
   AlertDialog(
@@ -79,48 +75,24 @@ fun ObjectEditDialog(
           )
         }
         item { Text(stringResource(R.string.custom_metadata), style = MaterialTheme.typography.titleSmall) }
-        itemsIndexed(metadata) { index, entry ->
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-              value = entry.key,
-              onValueChange = { metadata[index] = entry.copy(key = it) },
-              label = { Text(stringResource(R.string.metadata_key)) },
-              modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-              value = entry.value,
-              onValueChange = { metadata[index] = entry.copy(value = it) },
-              label = { Text(stringResource(R.string.metadata_value)) },
-              modifier = Modifier.weight(1f),
-            )
-            TooltipIconButton(stringResource(R.string.remove_metadata), { metadata.removeAt(index) }) {
-              AppIcon(R.drawable.ms_delete_24, null)
-            }
-          }
-        }
-        item {
-          TextButton(onClick = { metadata += EditableMetadata("", "") }) {
-            Text(stringResource(R.string.add_metadata))
-          }
-        }
+        metadataFields(metadata) { errorRes = null }
         errorRes?.let { item { Text(stringResource(it), color = MaterialTheme.colorScheme.error) } }
       }
     },
     confirmButton = {
       Button(onClick = {
-        val pairs = metadata.filter { it.key.isNotBlank() }
-        errorRes = when {
-          key.isBlank() || key.endsWith('/') -> R.string.error_object_key
-          pairs.map { it.key.lowercase() }.distinct().size != pairs.size -> R.string.error_metadata_duplicate
-          else -> null
+        val values = metadata.toMetadata()
+        when {
+          key.isBlank() || key.endsWith('/') -> errorRes = R.string.error_object_key
+          values == null -> errorRes = R.string.error_metadata_duplicate
+          else -> onSave(
+            key,
+            contentType.ifBlank { null },
+            cacheControl.ifBlank { null },
+            contentDisposition.ifBlank { null },
+            values,
+          )
         }
-        if (errorRes == null) onSave(
-          key.trimStart('/'),
-          contentType.ifBlank { null },
-          cacheControl.ifBlank { null },
-          contentDisposition.ifBlank { null },
-          pairs.associate { it.key.trim() to it.value },
-        )
       }) {
         AppIcon(R.drawable.ms_save_24, null)
         Text(stringResource(R.string.save))

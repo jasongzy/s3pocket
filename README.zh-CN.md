@@ -4,7 +4,7 @@
 
 <h1 align="center">S3 Pocket</h1>
 
-[English Doc](README.md)
+[English](README.md) | 简体中文
 
 S3 Pocket 是一款现代化的原生 Android 对象存储客户端，可以随时随地访问 Amazon S3、Cloudflare R2 及其他兼容 S3 的对象存储服务。
 

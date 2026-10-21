@@ -4,7 +4,7 @@
 
 <h1 align="center">S3 Pocket</h1>
 
-[中文文档](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md)
 
 S3 Pocket is a modern, native Android client for accessing Amazon S3, Cloudflare R2, and other S3-compatible object storage services anywhere.
 

@@ -61,11 +61,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -135,7 +133,6 @@ fun ObjectsScreen(
   onSharedUrisConsumed: () -> Boolean,
 ) {
   val context = LocalContext.current
-  val haptic = LocalHapticFeedback.current
   val scope = rememberCoroutineScope()
   val viewModel: ObjectsViewModel = viewModel {
     ObjectsViewModel(
@@ -620,10 +617,7 @@ fun ObjectsScreen(
                   if (selectedKeys.isNotEmpty()) selectedKeys = selectedKeys.toggle(item.key)
                   else if (item.isFolder) onOpenFolder(item.key) else onOpenObject(item.key)
                 },
-                onLongClick = {
-                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                  selectedKeys = selectedKeys.toggle(item.key)
-                },
+                onLongClick = { selectedKeys = selectedKeys.toggle(item.key) },
               )
             }
             if (state.nextContinuationToken != null && !state.isLoadingAll) {
@@ -648,10 +642,7 @@ fun ObjectsScreen(
                     onOpenObject(item.key)
                   }
                 },
-                onLongClick = {
-                  haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                  selectedKeys = selectedKeys.toggle(item.key)
-                },
+                onLongClick = { selectedKeys = selectedKeys.toggle(item.key) },
               )
             }
             if (state.nextContinuationToken != null && !state.isLoadingAll) {

@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,6 +34,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -432,6 +435,7 @@ private fun FavoriteCard(
   var itemStride by remember { mutableFloatStateOf(0f) }
   val itemSpacing = with(LocalDensity.current) { 12.dp.toPx() }
   val haptic = LocalHapticFeedback.current
+  val interactionSource = remember { MutableInteractionSource() }
   val containerColor by animateColorAsState(
     if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
     label = "Favorite selection",
@@ -460,9 +464,16 @@ private fun FavoriteCard(
     colors = CardDefaults.cardColors(containerColor = containerColor),
     elevation = CardDefaults.cardElevation(defaultElevation = elevation),
   ) {
-    Row(modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+      modifier = Modifier
+        .indication(interactionSource, ripple())
+        .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Row(
         modifier = Modifier.weight(1f).combinedClickable(
+          interactionSource = interactionSource,
+          indication = null,
           onClick = if (selecting) onSelect else onOpen,
           onLongClickLabel = stringResource(R.string.select),
           onLongClick = onSelect,
@@ -544,6 +555,7 @@ private fun ProfileCard(
   var itemStride by remember { mutableFloatStateOf(0f) }
   val itemSpacing = with(LocalDensity.current) { 12.dp.toPx() }
   val haptic = LocalHapticFeedback.current
+  val interactionSource = remember { MutableInteractionSource() }
   val scale by animateFloatAsState(if (isDragging) 1.02f else 1f, label = "Profile drag scale")
   val elevation by animateDpAsState(if (isDragging) 10.dp else 0.dp, label = "Profile drag elevation")
   val placementTranslation by animateFloatAsState(
@@ -571,14 +583,16 @@ private fun ProfileCard(
       },
     elevation = CardDefaults.cardElevation(defaultElevation = elevation),
   ) {
-    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+      modifier = Modifier.indication(interactionSource, ripple()).padding(16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Row(
         modifier = Modifier.weight(1f).combinedClickable(
+          interactionSource = interactionSource,
+          indication = null,
           onClick = onOpen,
-          onLongClick = {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            onInfo()
-          },
+          onLongClick = onInfo,
         ),
         verticalAlignment = Alignment.CenterVertically,
       ) {
@@ -594,6 +608,7 @@ private fun ProfileCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = if (credentialsAvailable) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
           )
         }
       }

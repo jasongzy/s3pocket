@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -108,9 +109,9 @@ internal fun GalleryObject(
   var imageLoaded by remember(item, previewUrl) { mutableStateOf(false) }
   Column(
     modifier = Modifier
+      .clip(MaterialTheme.shapes.medium)
       .background(
         if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-        MaterialTheme.shapes.medium,
       )
       .combinedClickable(onClick = onClick, onLongClick = onLongClick)
       .padding(8.dp),

@@ -2,8 +2,6 @@ package com.jasongzy.s3pocket.ui
 
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -53,7 +51,6 @@ fun BucketsScreen(
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
   val context = LocalContext.current
-  val haptic = LocalHapticFeedback.current
   val favorites by viewModel.favorites.collectAsStateWithLifecycle()
   var favoriteTarget by remember { mutableStateOf<BucketItem?>(null) }
   Scaffold(
@@ -98,10 +95,7 @@ fun BucketsScreen(
             BucketCard(
               bucket,
               onClick = { onOpenBucket(bucket.name) },
-              onLongClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                favoriteTarget = bucket
-              },
+              onLongClick = { favoriteTarget = bucket },
             )
           }
         }
@@ -131,8 +125,11 @@ fun BucketsScreen(
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun BucketCard(bucket: BucketItem, onClick: () -> Unit, onLongClick: () -> Unit) {
-  Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
-    Row(modifier = Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+  Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(18.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       AppIcon(
         R.drawable.ms_database_24,
         null,

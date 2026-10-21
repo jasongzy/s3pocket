@@ -18,6 +18,7 @@
     <string name="upload">上传</string>
     <plurals name="selected_count"><item quantity="other">已选择 %1$d 项</item></plurals>
     <string name="select_all">全选</string>
+    <string name="select">选择</string>
     <string name="move">移动</string>
     <string name="create_folder">新建目录</string>
     <string name="folder_name">目录名称</string>
@@ -61,6 +62,8 @@
     <string name="favorite_location">%1$s · %2$s</string>
     <string name="added_to_favorites">已添加收藏</string>
     <string name="removed_from_favorites">已取消收藏</string>
+    <plurals name="remove_favorites_title"><item quantity="other">移除 %1$d 项收藏？</item></plurals>
+    <string name="remove_favorites_description">所选收藏将从主页移除，对应对象仍保留在存储桶中</string>
     <string name="favorite_current_folder">收藏当前路径</string>
     <string name="search_files">搜索当前目录</string>
     <string name="search_hint">搜索名称</string>

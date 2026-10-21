@@ -15,8 +15,8 @@ class ProfilesViewModel(private val repository: ProfileRepository) : ViewModel()
   val state: StateFlow<ProfileStoreState?> =
     repository.state.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-  val favorites: StateFlow<List<FavoriteItem>> =
-    repository.favorites.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+  val favorites: StateFlow<List<FavoriteItem>?> =
+    repository.favorites.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
   fun delete(id: String) {
     viewModelScope.launch { repository.delete(id) }
@@ -30,10 +30,9 @@ class ProfilesViewModel(private val repository: ProfileRepository) : ViewModel()
     viewModelScope.launch { repository.reorder(profiles.map { it.id }) }
   }
 
-  fun removeFavorite(favorite: FavoriteItem, onSaved: () -> Unit) {
+  fun removeFavorites(favorites: List<FavoriteItem>, onResult: (Result<Unit>) -> Unit) {
     viewModelScope.launch {
-      repository.setFavorite(favorite, false)
-      onSaved()
+      onResult(runSuspendCatching { repository.setFavorites(favorites, false) })
     }
   }
 

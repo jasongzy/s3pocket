@@ -97,20 +97,12 @@ class ProfileRepository(
     }
   }
 
-  suspend fun setFavorite(favorite: FavoriteItem, enabled: Boolean) {
-    context.profileDataStore.edit { preferences ->
-      val current = preferences[FAVORITES]?.let(::decodeFavorites).orEmpty()
-      val updated = current.filterNot { it.id == favorite.id }.let { if (enabled) it + favorite else it }
-      preferences[FAVORITES] = encodeFavorites(updated)
-    }
-  }
+  suspend fun setFavorite(favorite: FavoriteItem, enabled: Boolean) = setFavorites(listOf(favorite), enabled)
 
   suspend fun setFavorites(items: List<FavoriteItem>, enabled: Boolean) {
-    val ids = items.mapTo(mutableSetOf()) { it.id }
     context.profileDataStore.edit { preferences ->
       val current = preferences[FAVORITES]?.let(::decodeFavorites).orEmpty()
-      val retained = current.filterNot { it.id in ids }
-      preferences[FAVORITES] = encodeFavorites(if (enabled) retained + items else retained)
+      preferences[FAVORITES] = encodeFavorites(current.updateFavorites(items, enabled))
     }
   }
 
@@ -314,6 +306,12 @@ data class ImportBackupResult(
   val settings: AppSettingsSnapshot?,
   val hasUnassignedPublicUrls: Boolean,
 )
+
+internal fun List<FavoriteItem>.updateFavorites(items: List<FavoriteItem>, enabled: Boolean): List<FavoriteItem> {
+  if (enabled) return (this + items).distinctBy { it.id }
+  val ids = items.mapTo(mutableSetOf()) { it.id }
+  return filterNot { it.id in ids }
+}
 
 internal fun List<FavoriteItem>.moveFavorites(
   profileId: String,

@@ -1,6 +1,7 @@
 package com.jasongzy.s3pocket.ui
 
-import androidx.compose.foundation.clickable
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -22,6 +24,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -79,7 +83,29 @@ fun ProfilesScreen(
   val profiles = state?.profiles.orEmpty()
   val unavailableCredentialIds = state?.unavailableCredentialIds.orEmpty()
   val context = LocalContext.current
-  val favorites by viewModel.favorites.collectAsStateWithLifecycle()
+  val storedFavorites by viewModel.favorites.collectAsStateWithLifecycle()
+  val favorites = storedFavorites.orEmpty()
+  var selectedFavorites by rememberSaveable { mutableStateOf(emptyList<String>()) }
+  var favoritesToRemove by remember { mutableStateOf<List<FavoriteItem>?>(null) }
+  var isRemovingFavorites by remember { mutableStateOf(false) }
+  var favoriteRemovalError by remember { mutableStateOf<String?>(null) }
+  val selectingFavorites = selectedFavorites.isNotEmpty()
+  fun toggleFavorite(id: String) {
+    selectedFavorites = if (id in selectedFavorites) selectedFavorites - id else selectedFavorites + id
+  }
+  fun dismissFavoriteRemoval() {
+    if (!isRemovingFavorites) {
+      favoritesToRemove = null
+      favoriteRemovalError = null
+    }
+  }
+  BackHandler(selectingFavorites) { selectedFavorites = emptyList() }
+  LaunchedEffect(storedFavorites) {
+    storedFavorites?.let { items ->
+      val ids = items.mapTo(mutableSetOf()) { it.id }
+      selectedFavorites = selectedFavorites.filter { it in ids }
+    }
+  }
   var deleting by remember { mutableStateOf<StorageProfile?>(null) }
   var showCredentialRecovery by remember { mutableStateOf(false) }
   val orderedProfiles = remember { mutableStateListOf<StorageProfile>() }
@@ -101,7 +127,8 @@ fun ProfilesScreen(
   }
   LaunchedEffect(favorites, favoriteDragState == null, pendingFavoriteOrder) {
     val persistedOrder = favorites.map { it.id }
-    if (favoriteDragState == null && (pendingFavoriteOrder == null || pendingFavoriteOrder == persistedOrder)) {
+    val orderPending = pendingFavoriteOrder?.let { it != persistedOrder && it.toSet() == persistedOrder.toSet() } == true
+    if (favoriteDragState == null && !orderPending) {
       orderedFavorites.clear()
       orderedFavorites.addAll(favorites)
       pendingFavoriteOrder = null
@@ -112,23 +139,49 @@ fun ProfilesScreen(
     topBar = {
       TopAppBar(
         title = {
-          Column {
-            Text(stringResource(R.string.app_name), fontWeight = FontWeight.SemiBold)
-            Text(stringResource(R.string.app_tagline), style = MaterialTheme.typography.labelMedium)
+          if (selectingFavorites) {
+            Text(pluralStringResource(R.plurals.selected_count, selectedFavorites.size, selectedFavorites.size))
+          } else {
+            Column {
+              Text(stringResource(R.string.app_name), fontWeight = FontWeight.SemiBold)
+              Text(stringResource(R.string.app_tagline), style = MaterialTheme.typography.labelMedium)
+            }
+          }
+        },
+        navigationIcon = {
+          if (selectingFavorites) {
+            TooltipIconButton(stringResource(R.string.cancel), { selectedFavorites = emptyList() }) {
+              AppIcon(R.drawable.ms_close_24, null)
+            }
           }
         },
         actions = {
-          TooltipIconButton(stringResource(R.string.settings), onSettings) {
-            AppIcon(R.drawable.ms_settings_24, null)
+          if (selectingFavorites) {
+            TooltipIconButton(
+              stringResource(R.string.select_all),
+              { selectedFavorites = favorites.map { it.id } },
+              enabled = selectedFavorites.size < favorites.size,
+            ) { AppIcon(R.drawable.ms_select_all_24, null) }
+            TooltipIconButton(
+              stringResource(R.string.delete),
+              { favoritesToRemove = favorites.filter { it.id in selectedFavorites } },
+              enabled = favorites.any { it.id in selectedFavorites },
+            ) { AppIcon(R.drawable.ms_delete_24, null) }
+          } else {
+            TooltipIconButton(stringResource(R.string.settings), onSettings) {
+              AppIcon(R.drawable.ms_settings_24, null)
+            }
           }
         },
       )
     },
     floatingActionButton = {
-      FloatingActionButton(
-        onClick = onAdd,
-      ) {
-        AppIcon(R.drawable.ms_add_24, stringResource(R.string.add_profile))
+      if (!selectingFavorites) {
+        FloatingActionButton(
+          onClick = onAdd,
+        ) {
+          AppIcon(R.drawable.ms_add_24, stringResource(R.string.add_profile))
+        }
       }
     },
   ) { padding ->
@@ -226,6 +279,9 @@ fun ProfilesScreen(
               position = index,
               favorite = favorite,
               profileName = profiles.firstOrNull { it.id == favorite.profileId }?.name.orEmpty(),
+              selecting = selectingFavorites,
+              selected = favorite.id in selectedFavorites,
+              onSelect = { toggleFavorite(favorite.id) },
               isDragActive = activeDrag != null,
               isDragging = isDragging,
               translationY = activeDrag?.translationFor(index) ?: 0f,
@@ -233,7 +289,7 @@ fun ProfilesScreen(
                 if (favorite.profileId in unavailableCredentialIds) onEdit(favorite.profileId)
                 else onOpenFavorite(favorite)
               },
-              onRemove = { viewModel.removeFavorite(favorite) { context.showFavoriteToast(false) } },
+              onRemove = { favoritesToRemove = listOf(favorite) },
               onDragStart = { stride -> favoriteDragState = ItemDragState(favorite.id, index, index, 0f, stride) },
               onDrag = { offset, stride ->
                 favoriteDragState = favoriteDragState?.moveTo(offset, stride, orderedFavorites.size)
@@ -256,6 +312,45 @@ fun ProfilesScreen(
         item { Spacer(Modifier.size(80.dp)) }
       }
     }
+  }
+
+  favoritesToRemove?.let { items ->
+    AlertDialog(
+      onDismissRequest = ::dismissFavoriteRemoval,
+      icon = { AppIcon(R.drawable.ms_warning_24, null, tint = MaterialTheme.colorScheme.error) },
+      title = { Text(pluralStringResource(R.plurals.remove_favorites_title, items.size, items.size)) },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          Text(stringResource(R.string.remove_favorites_description))
+          favoriteRemovalError?.let {
+            SelectionContainer { Text(it, color = MaterialTheme.colorScheme.error) }
+          }
+        }
+      },
+      confirmButton = {
+        TextButton(
+          enabled = !isRemovingFavorites,
+          onClick = {
+            isRemovingFavorites = true
+            favoriteRemovalError = null
+            viewModel.removeFavorites(items) { result ->
+              isRemovingFavorites = false
+              result.onSuccess {
+                selectedFavorites = selectedFavorites - items.map { it.id }.toSet()
+                favoritesToRemove = null
+                context.showFavoriteToast(false)
+              }.onFailure { favoriteRemovalError = it.userMessage() }
+            }
+          },
+          colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+        ) { Text(stringResource(R.string.delete)) }
+      },
+      dismissButton = {
+        TextButton(onClick = ::dismissFavoriteRemoval, enabled = !isRemovingFavorites) {
+          Text(stringResource(R.string.cancel))
+        }
+      },
+    )
   }
 
   deleting?.let { profile ->
@@ -313,12 +408,16 @@ fun ProfilesScreen(
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FavoriteCard(
   modifier: Modifier,
   position: Int,
   favorite: FavoriteItem,
   profileName: String,
+  selecting: Boolean,
+  selected: Boolean,
+  onSelect: () -> Unit,
   isDragActive: Boolean,
   isDragging: Boolean,
   translationY: Float,
@@ -333,6 +432,10 @@ private fun FavoriteCard(
   var itemStride by remember { mutableFloatStateOf(0f) }
   val itemSpacing = with(LocalDensity.current) { 12.dp.toPx() }
   val haptic = LocalHapticFeedback.current
+  val containerColor by animateColorAsState(
+    if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+    label = "Favorite selection",
+  )
   val scale by animateFloatAsState(if (isDragging) 1.02f else 1f, label = "Favorite drag scale")
   val elevation by animateDpAsState(if (isDragging) 10.dp else 0.dp, label = "Favorite drag elevation")
   val placementTranslation by animateFloatAsState(
@@ -353,53 +456,66 @@ private fun FavoriteCard(
           isDragActive -> placementTranslation
           else -> 0f
         }
-      }
-      .clickable(onClick = onOpen),
+      },
+    colors = CardDefaults.cardColors(containerColor = containerColor),
     elevation = CardDefaults.cardElevation(defaultElevation = elevation),
   ) {
     Row(modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-      AppIcon(
-        when (favorite.kind) {
-          FavoriteKind.BUCKET -> R.drawable.ms_database_24
-          FavoriteKind.FOLDER -> R.drawable.ms_folder_24
-          FavoriteKind.FILE -> R.drawable.ms_draft_24
-        },
-        null,
-        Modifier.size(28.dp),
-        MaterialTheme.colorScheme.primary,
-      )
-      Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
-        Text(favorite.name, maxLines = 1, style = MaterialTheme.typography.titleSmall)
-        Text(
-          stringResource(R.string.favorite_location, profileName, favorite.bucket),
-          maxLines = 1,
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-      }
-      TooltipIconButton(stringResource(R.string.remove_from_favorites), onRemove) {
-        AppIcon(R.drawable.ms_star_24, null, tint = MaterialTheme.colorScheme.primary)
-      }
-      Box(
-        modifier = Modifier.size(48.dp).pointerInput(favorite.id, position, itemStride) {
-          detectDragGesturesAfterLongPress(
-            onDragStart = {
-              haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-              dragDistance = 0f
-              onDragStart(itemStride)
-            },
-            onDragCancel = { dragDistance = 0f; onDragCancel() },
-            onDragEnd = { dragDistance = 0f; onDragEnd() },
-            onDrag = { change, amount ->
-              change.consume()
-              dragDistance += amount.y
-              if (itemStride > 0f) onDrag(dragDistance, itemStride)
-            },
-          )
-        },
-        contentAlignment = Alignment.Center,
+      Row(
+        modifier = Modifier.weight(1f).combinedClickable(
+          onClick = if (selecting) onSelect else onOpen,
+          onLongClickLabel = stringResource(R.string.select),
+          onLongClick = onSelect,
+        ),
+        verticalAlignment = Alignment.CenterVertically,
       ) {
-        AppIcon(R.drawable.ms_drag_indicator_24, stringResource(R.string.reorder_favorites), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        AppIcon(
+          when (favorite.kind) {
+            FavoriteKind.BUCKET -> R.drawable.ms_database_24
+            FavoriteKind.FOLDER -> R.drawable.ms_folder_24
+            FavoriteKind.FILE -> R.drawable.ms_draft_24
+          },
+          null,
+          Modifier.size(28.dp),
+          MaterialTheme.colorScheme.primary,
+        )
+        Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
+          Text(favorite.name, maxLines = 1, style = MaterialTheme.typography.titleSmall)
+          Text(
+            stringResource(R.string.favorite_location, profileName, favorite.bucket),
+            maxLines = 1,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
+      if (selecting) {
+        Checkbox(checked = selected, onCheckedChange = { onSelect() })
+      } else {
+        TooltipIconButton(stringResource(R.string.remove_from_favorites), onRemove) {
+          AppIcon(R.drawable.ms_star_24, null, tint = MaterialTheme.colorScheme.primary)
+        }
+        Box(
+          modifier = Modifier.size(48.dp).pointerInput(favorite.id, position, itemStride) {
+            detectDragGesturesAfterLongPress(
+              onDragStart = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                dragDistance = 0f
+                onDragStart(itemStride)
+              },
+              onDragCancel = { dragDistance = 0f; onDragCancel() },
+              onDragEnd = { dragDistance = 0f; onDragEnd() },
+              onDrag = { change, amount ->
+                change.consume()
+                dragDistance += amount.y
+                if (itemStride > 0f) onDrag(dragDistance, itemStride)
+              },
+            )
+          },
+          contentAlignment = Alignment.Center,
+        ) {
+          AppIcon(R.drawable.ms_drag_indicator_24, stringResource(R.string.reorder_favorites), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
       }
     }
   }

@@ -22,6 +22,7 @@
         <item quantity="other">%1$d selected</item>
     </plurals>
     <string name="select_all">Select all</string>
+    <string name="select">Select</string>
     <string name="move">Move</string>
     <string name="create_folder">Create folder</string>
     <string name="folder_name">Folder name</string>
@@ -71,6 +72,11 @@
     <string name="favorite_location">%1$s · %2$s</string>
     <string name="added_to_favorites">Added to favorites</string>
     <string name="removed_from_favorites">Removed from favorites</string>
+    <plurals name="remove_favorites_title">
+        <item quantity="one">Remove %1$d favorite?</item>
+        <item quantity="other">Remove %1$d favorites?</item>
+    </plurals>
+    <string name="remove_favorites_description">Selected favorites will be removed from the home screen. Their objects remain in storage.</string>
     <string name="favorite_current_folder">Favorite current folder</string>
     <string name="search_files">Search this folder</string>
     <string name="search_hint">Search names</string>

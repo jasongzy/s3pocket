@@ -184,6 +184,7 @@
     <string name="discard">Discard</string>
     <string name="save_and_connect">Save and connect</string>
     <string name="error_profile_name">Enter a profile name</string>
+    <string name="error_profile_not_found">Profile not found</string>
     <string name="error_account_id">Cloudflare Account ID must be 32 hexadecimal characters</string>
     <string name="error_access_key">Enter the Access Key ID</string>
     <string name="error_secret_key">Enter the Secret Access Key</string>

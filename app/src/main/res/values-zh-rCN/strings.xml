@@ -169,6 +169,7 @@
     <string name="discard">放弃</string>
     <string name="save_and_connect">保存并连接</string>
     <string name="error_profile_name">请输入连接名称</string>
+    <string name="error_profile_not_found">未找到存储连接</string>
     <string name="error_account_id">Cloudflare 账户 ID 必须是 32 位十六进制字符</string>
     <string name="error_access_key">请输入访问密钥 ID</string>
     <string name="error_secret_key">请输入秘密访问密钥</string>

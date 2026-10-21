@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 
 class ProfilesViewModel(private val repository: ProfileRepository) : ViewModel() {
   val state: StateFlow<ProfileStoreState?> =
-    repository.state.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    repository.state.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
   val favorites: StateFlow<List<FavoriteItem>?> =
     repository.favorites.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)

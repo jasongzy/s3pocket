@@ -61,8 +61,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.model.StorageProfile
 import com.jasongzy.s3pocket.data.model.StorageProvider
 import com.jasongzy.s3pocket.data.model.FavoriteItem
@@ -72,7 +70,7 @@ import com.jasongzy.s3pocket.R
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfilesScreen(
-  repository: ProfileRepository,
+  viewModel: ProfilesViewModel,
   pendingSharedCount: Int,
   onAdd: () -> Unit,
   onEdit: (String) -> Unit,
@@ -80,7 +78,6 @@ fun ProfilesScreen(
   onOpen: (String) -> Unit,
   onOpenFavorite: (FavoriteItem) -> Unit,
   onSettings: () -> Unit,
-  viewModel: ProfilesViewModel = viewModel { ProfilesViewModel(repository) },
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
   val profiles = state?.profiles.orEmpty()

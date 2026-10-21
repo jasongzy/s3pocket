@@ -15,6 +15,7 @@ import com.jasongzy.s3pocket.data.security.ProfileBackupCipher
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -44,9 +45,11 @@ class ProfileRepository(
   private val backupCipher: ProfileBackupCipher = ProfileBackupCipher(),
 ) {
   private val json = Json { ignoreUnknownKeys = true }
-  val state: Flow<ProfileStoreState> = context.profileDataStore.data.map { preferences ->
-    decodeStoredProfiles(preferences[PROFILES].orEmpty(), cipher, json)
-  }.flowOn(Dispatchers.IO)
+  val state: Flow<ProfileStoreState> = context.profileDataStore.data
+    .map { it[PROFILES].orEmpty() }
+    .distinctUntilChanged()
+    .map { decodeStoredProfiles(it, cipher, json) }
+    .flowOn(Dispatchers.IO)
 
   val profiles: Flow<List<StorageProfile>> = state.map { it.profiles }
   val favorites: Flow<List<FavoriteItem>> = context.profileDataStore.data.map { preferences ->

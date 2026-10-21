@@ -30,26 +30,29 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
-import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.CloudflareMetricsRepository
-import com.jasongzy.s3pocket.data.ProfileRepository
+import com.jasongzy.s3pocket.data.ProfileStoreState
 import com.jasongzy.s3pocket.data.model.StorageProvider
+import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileInfoScreen(
   profileId: String,
-  profiles: ProfileRepository,
+  profiles: StateFlow<ProfileStoreState?>,
   metricsRepository: CloudflareMetricsRepository,
   onBack: () -> Unit,
   onEdit: () -> Unit,
-  viewModel: ProfileInfoViewModel = viewModel { ProfileInfoViewModel(profileId, profiles, metricsRepository) },
+  viewModel: ProfileInfoViewModel = viewModel { ProfileInfoViewModel(profileId, profiles, metricsRepository::fetch) },
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
-  LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.loadProfile() }
+  LifecycleStartEffect(Unit) {
+    viewModel.loadProfile()
+    onStopOrDispose { viewModel.stopLoading() }
+  }
   val context = LocalContext.current
   Scaffold(
     topBar = {
@@ -66,7 +69,7 @@ fun ProfileInfoScreen(
   ) { padding ->
     when {
       state.isProfileLoading && state.profile == null -> LoadingPane(padding)
-      state.profile == null -> MessagePane(stringResource(R.string.profile_info), state.profileError.orEmpty(), padding)
+      state.profile == null -> MessagePane(stringResource(R.string.profile_info), stringResource(R.string.error_profile_not_found), padding)
       else -> Column(
         modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),

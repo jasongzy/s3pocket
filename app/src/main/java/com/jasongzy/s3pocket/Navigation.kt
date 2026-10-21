@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import android.net.Uri
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
@@ -31,6 +32,7 @@ import com.jasongzy.s3pocket.ui.ObjectDetailsScreen
 import com.jasongzy.s3pocket.ui.ObjectsScreen
 import com.jasongzy.s3pocket.ui.ProfileEditorScreen
 import com.jasongzy.s3pocket.ui.ProfilesScreen
+import com.jasongzy.s3pocket.ui.ProfilesViewModel
 import com.jasongzy.s3pocket.ui.SettingsScreen
 import com.jasongzy.s3pocket.ui.ProfileInfoScreen
 import com.jasongzy.s3pocket.data.model.FavoriteKind
@@ -47,6 +49,7 @@ fun MainNavigation(
   val backStack = rememberNavBackStack(ProfilesRoute)
   val application = LocalContext.current.applicationContext as S3PocketApplication
   val container = application.container
+  val profilesViewModel: ProfilesViewModel = viewModel { ProfilesViewModel(container.profileRepository) }
   val editorOffset = with(LocalDensity.current) { 48.dp.roundToPx() } *
     if (LocalLayoutDirection.current == LayoutDirection.Ltr) 1 else -1
   SideEffect { onUploadDestinationChanged(backStack.lastOrNull() is ObjectsRoute) }
@@ -70,7 +73,7 @@ fun MainNavigation(
       entryProvider {
         entry<ProfilesRoute> {
           ProfilesScreen(
-            repository = container.profileRepository,
+            viewModel = profilesViewModel,
             pendingSharedCount = sharedUris.size.takeIf { !openSharedImmediately } ?: 0,
             onAdd = { backStack.add(ProfileEditorRoute()) },
             onEdit = { backStack.add(ProfileEditorRoute(it)) },
@@ -113,7 +116,7 @@ fun MainNavigation(
         entry<ProfileInfoRoute> { route ->
           ProfileInfoScreen(
             profileId = route.profileId,
-            profiles = container.profileRepository,
+            profiles = profilesViewModel.state,
             metricsRepository = container.cloudflareMetricsRepository,
             onBack = { backStack.popIfCurrent(route) },
             onEdit = { backStack.add(ProfileEditorRoute(route.profileId)) },

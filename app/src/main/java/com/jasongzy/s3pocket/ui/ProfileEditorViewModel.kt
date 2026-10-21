@@ -34,12 +34,17 @@ data class ProfileFormState(
   val endpoint: String = "",
   val forcePathStyle: Boolean = false,
   val publicUrls: List<PublicUrlEntry> = emptyList(),
+  val hasChanges: Boolean = false,
   val isLoading: Boolean = false,
   val isTesting: Boolean = false,
   val testSucceeded: Boolean = false,
   @param:StringRes val errorRes: Int? = null,
   val errorDetail: String? = null,
 ) {
+  internal fun hasChangesFrom(original: ProfileFormState): Boolean =
+    toProfile() != original.toProfile() ||
+      publicUrls.map { it.bucket to it.baseUrl } != original.publicUrls.map { it.bucket to it.baseUrl }
+
   fun validationError(checkName: Boolean = true): ProfileError? =
     if (publicUrls.map { it.bucket }.distinct().size != publicUrls.size) ProfileError.DUPLICATE_PUBLIC_BUCKET
     else toProfile().validationError(checkName)
@@ -66,6 +71,7 @@ class ProfileEditorViewModel(
 ) : ViewModel() {
   private val _state = MutableStateFlow(ProfileFormState(id = profileId.orEmpty(), isLoading = profileId != null))
   val state: StateFlow<ProfileFormState> = _state
+  private var original = _state.value
   private var testJob: Job? = null
 
   init {
@@ -73,7 +79,7 @@ class ProfileEditorViewModel(
       viewModelScope.launch {
         runSuspendCatching { requireNotNull(repository.find(profileId)) { "Profile not found" } }
           .onSuccess { profile ->
-            _state.value =
+            original =
               ProfileFormState(
                 id = profile.id,
                 name = profile.name,
@@ -88,6 +94,7 @@ class ProfileEditorViewModel(
                 publicUrls = profile.publicBaseUrls.map { (bucket, url) -> PublicUrlEntry(bucket, url) } +
                   listOfNotNull(profile.unassignedPublicUrl.takeIf(String::isNotEmpty)?.let { PublicUrlEntry(baseUrl = it) }),
               )
+            _state.value = original
           }
           .onFailure { error -> _state.update { it.copy(isLoading = false, errorDetail = error.userMessage()) } }
       }
@@ -151,7 +158,11 @@ class ProfileEditorViewModel(
       runSuspendCatching {
           repository.save(form.toProfile())
         }
-        .onSuccess { onSaved(it.id) }
+        .onSuccess {
+          original = form
+          _state.update { current -> current.copy(hasChanges = false) }
+          onSaved(it.id)
+        }
         .onFailure { error -> _state.update { it.copy(isLoading = false, errorDetail = error.userMessage()) } }
     }
   }
@@ -174,6 +185,15 @@ class ProfileEditorViewModel(
   private fun update(transform: (ProfileFormState) -> ProfileFormState) {
     if (state.value.isLoading) return
     testJob?.cancel()
-    _state.update { transform(it).copy(isTesting = false, testSucceeded = false, errorRes = null, errorDetail = null) }
+    _state.update {
+      val updated = transform(it)
+      updated.copy(
+        hasChanges = updated.hasChangesFrom(original),
+        isTesting = false,
+        testSucceeded = false,
+        errorRes = null,
+        errorDetail = null,
+      )
+    }
   }
 }

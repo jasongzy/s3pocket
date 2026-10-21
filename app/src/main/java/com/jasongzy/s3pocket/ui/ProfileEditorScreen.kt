@@ -1,6 +1,7 @@
 package com.jasongzy.s3pocket.ui
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -31,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -62,23 +66,37 @@ fun ProfileEditorScreen(
   val state by viewModel.state.collectAsStateWithLifecycle()
   var showSecret by remember { mutableStateOf(false) }
   var showManagementToken by remember { mutableStateOf(false) }
+  var confirmSave by rememberSaveable { mutableStateOf(false) }
   val context = LocalContext.current
   val uriHandler = LocalUriHandler.current
+
+  fun requestBack() {
+    if (state.hasChanges) {
+      if (!state.isLoading) confirmSave = true
+    } else {
+      onBack()
+    }
+  }
+
+  fun saveAndExit() {
+    confirmSave = false
+    viewModel.save {
+      Toast.makeText(context, R.string.saved_successfully, Toast.LENGTH_SHORT).show()
+      onBack()
+    }
+  }
+
+  BackHandler(enabled = state.hasChanges, onBack = ::requestBack)
 
   Scaffold(
     topBar = {
       TopAppBar(
         title = { Text(stringResource(if (profileId == null) R.string.add_profile else R.string.edit_profile)) },
-        navigationIcon = { BackButton(onBack) },
+        navigationIcon = { BackButton(::requestBack) },
         actions = {
           TooltipIconButton(
             label = stringResource(R.string.save),
-            onClick = {
-              viewModel.save {
-                Toast.makeText(context, R.string.saved_successfully, Toast.LENGTH_SHORT).show()
-                onBack()
-              }
-            },
+            onClick = ::saveAndExit,
             enabled = !state.isLoading && !state.isTesting,
           ) {
             AppIcon(R.drawable.ms_save_24, null)
@@ -297,6 +315,33 @@ fun ProfileEditorScreen(
         }
       }
     }
+  }
+
+  if (confirmSave) {
+    AlertDialog(
+      onDismissRequest = { if (!state.isLoading) confirmSave = false },
+      title = { Text(stringResource(R.string.save_changes_title)) },
+      text = { Text(stringResource(R.string.save_changes_message)) },
+      confirmButton = {
+        TextButton(onClick = ::saveAndExit, enabled = !state.isLoading && !state.isTesting) {
+          Text(stringResource(R.string.save))
+        }
+      },
+      dismissButton = {
+        Row {
+          TextButton(onClick = { confirmSave = false }, enabled = !state.isLoading) {
+            Text(stringResource(R.string.keep_editing))
+          }
+          TextButton(
+            onClick = { confirmSave = false; onBack() },
+            enabled = !state.isLoading,
+            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+          ) {
+            Text(stringResource(R.string.discard))
+          }
+        }
+      },
+    )
   }
 }
 

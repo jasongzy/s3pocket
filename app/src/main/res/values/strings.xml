@@ -178,6 +178,10 @@
     <string name="credential_security_description">Credentials are encrypted with a non-exportable Android Keystore key and excluded from Android system backup. Configuration backups exported in the app still include credentials.</string>
     <string name="saving">Saving…</string>
     <string name="save">Save</string>
+    <string name="save_changes_title">Save changes?</string>
+    <string name="save_changes_message">Save your changes before leaving the editor?</string>
+    <string name="keep_editing">Keep editing</string>
+    <string name="discard">Discard</string>
     <string name="save_and_connect">Save and connect</string>
     <string name="error_profile_name">Enter a profile name</string>
     <string name="error_account_id">Cloudflare Account ID must be 32 hexadecimal characters</string>

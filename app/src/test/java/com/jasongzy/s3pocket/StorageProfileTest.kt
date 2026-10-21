@@ -7,10 +7,39 @@ import com.jasongzy.s3pocket.ui.ProfileFormState
 import com.jasongzy.s3pocket.ui.PublicUrlEntry
 import com.jasongzy.s3pocket.ui.parseDownloadUrl
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StorageProfileTest {
+  @Test
+  fun formChangesTrackEditableDataAndIgnoreOperationStatus() {
+    val original = ProfileFormState(name = "Storage", region = "us-east-1", secretAccessKey = "secret")
+    assertTrue(original.copy(name = "Renamed").hasChangesFrom(original))
+    assertTrue(original.copy(secretAccessKey = "updated").hasChangesFrom(original))
+    assertTrue(original.copy(provider = StorageProvider.CLOUDFLARE_R2).hasChangesFrom(original))
+    assertFalse(original.copy(name = "Renamed").copy(name = original.name).hasChangesFrom(original))
+    assertFalse(
+      original.copy(hasChanges = true, isLoading = true, isTesting = true, testSucceeded = true, errorDetail = "error")
+        .hasChangesFrom(original),
+    )
+  }
+
+  @Test
+  fun publicUrlEditsIgnoreRowIdsButKeepIncompleteAndDuplicateRows() {
+    val entry = PublicUrlEntry("photos", "https://cdn.example.com")
+    val original = ProfileFormState(publicUrls = listOf(entry))
+    assertFalse(original.copy(publicUrls = listOf(entry.copy(id = "new-id"))).hasChangesFrom(original))
+    assertTrue(original.copy(publicUrls = emptyList()).hasChangesFrom(original))
+    assertTrue(original.copy(publicUrls = listOf(entry, PublicUrlEntry())).hasChangesFrom(original))
+    assertTrue(original.copy(publicUrls = listOf(entry, entry.copy(id = "duplicate"))).hasChangesFrom(original))
+    val empty = ProfileFormState()
+    val edited = empty.copy(publicUrls = listOf(PublicUrlEntry()))
+    assertTrue(edited.hasChangesFrom(empty))
+    assertFalse(edited.copy(publicUrls = emptyList()).hasChangesFrom(empty))
+  }
+
   @Test
   fun profileFormsUseOnlyTheSelectedProvidersFields() {
     val form = ProfileFormState(

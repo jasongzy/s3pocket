@@ -163,6 +163,10 @@
     <string name="credential_security_description">凭据使用 Android Keystore 中不可导出的密钥加密，并排除在 Android 系统备份之外。App 内导出的配置备份仍会包含凭据。</string>
     <string name="saving">正在保存…</string>
     <string name="save">保存</string>
+    <string name="save_changes_title">保存更改？</string>
+    <string name="save_changes_message">是否保存当前更改并退出编辑？</string>
+    <string name="keep_editing">继续编辑</string>
+    <string name="discard">放弃</string>
     <string name="save_and_connect">保存并连接</string>
     <string name="error_profile_name">请输入连接名称</string>
     <string name="error_account_id">Cloudflare 账户 ID 必须是 32 位十六进制字符</string>

@@ -33,6 +33,22 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+        <activity-alias
+            android:name=".OpenWithActivity"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+            </intent-filter>
+        </activity-alias>
         <service
             android:name=".data.transfer.TransferService"
             android:exported="false"

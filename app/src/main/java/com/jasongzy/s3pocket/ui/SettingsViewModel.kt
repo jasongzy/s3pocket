@@ -79,6 +79,10 @@ class SettingsViewModel(
     viewModelScope.launch { repository.setFilePreviewEnabled(enabled) }
   }
 
+  fun setOpenWithEnabled(enabled: Boolean) {
+    viewModelScope.launch { repository.setOpenWithEnabled(enabled) }
+  }
+
   fun setPresignedUrlExpiryMinutes(minutes: Int) {
     viewModelScope.launch { repository.setPresignedUrlExpiryMinutes(minutes) }
   }

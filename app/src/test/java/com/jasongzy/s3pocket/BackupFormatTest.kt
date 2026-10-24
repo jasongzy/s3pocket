@@ -24,7 +24,9 @@ class BackupFormatTest {
       accessKeyId = "key", secretAccessKey = "secret", regionName = "us-east-1",
       publicBaseUrls = mapOf("bucket" to "https://cdn.example.com", "photos" to "https://cdn.example.com/photos"))
     val favorite = FavoriteItem("id", "bucket", "dir/", FavoriteKind.FOLDER)
-    val backup = AppBackup(listOf(profile), AppSettingsSnapshot(), listOf(favorite), CURRENT_BACKUP_FORMAT_VERSION)
+    val backup = AppBackup(
+      listOf(profile), AppSettingsSnapshot(openWithEnabled = true), listOf(favorite), CURRENT_BACKUP_FORMAT_VERSION,
+    )
     val encoded = Json.encodeToString(backup)
     assertEquals(JsonPrimitive(CURRENT_BACKUP_FORMAT_VERSION), Json.parseToJsonElement(encoded).jsonObject["formatVersion"])
     val decoded = decodeAppBackup(encoded)
@@ -70,6 +72,7 @@ class BackupFormatTest {
 
     assertEquals(CURRENT_BACKUP_FORMAT_VERSION, backup.formatVersion)
     assertEquals(false, backup.settings?.filePreviewEnabled)
+    assertEquals(false, backup.settings?.openWithEnabled)
   }
 
   @Test

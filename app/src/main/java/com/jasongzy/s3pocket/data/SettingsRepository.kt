@@ -73,6 +73,7 @@ class SettingsRepository(private val context: Context) {
       galleryThumbnailSize = preferences[GALLERY_THUMBNAIL_SIZE].enumOrDefault(GalleryThumbnailSize.MEDIUM),
       galleryImageScale = preferences[GALLERY_IMAGE_SCALE].enumOrDefault(GalleryImageScale.FIT),
       filePreviewEnabled = preferences[FILE_PREVIEW_ENABLED] ?: true,
+      openWithEnabled = preferences[OPEN_WITH_ENABLED] ?: false,
       presignedUrlExpiryMinutes = preferences[PRESIGNED_URL_EXPIRY_MINUTES] ?: DEFAULT_PRESIGNED_URL_EXPIRY_MINUTES,
       allowRecursiveFolderDelete = preferences[ALLOW_RECURSIVE_FOLDER_DELETE] ?: false,
       advancedSettingsEnabled = preferences[ADVANCED_SETTINGS_ENABLED] ?: false,
@@ -121,6 +122,10 @@ class SettingsRepository(private val context: Context) {
     context.settingsDataStore.edit { it[FILE_PREVIEW_ENABLED] = enabled }
   }
 
+  suspend fun setOpenWithEnabled(enabled: Boolean) {
+    context.settingsDataStore.edit { it[OPEN_WITH_ENABLED] = enabled }
+  }
+
   suspend fun setPresignedUrlExpiryMinutes(minutes: Int) {
     require(minutes in 1..MAX_PRESIGNED_URL_EXPIRY_MINUTES)
     context.settingsDataStore.edit { it[PRESIGNED_URL_EXPIRY_MINUTES] = minutes }
@@ -150,6 +155,7 @@ class SettingsRepository(private val context: Context) {
       it[GALLERY_THUMBNAIL_SIZE] = snapshot.galleryThumbnailSize.name
       it[GALLERY_IMAGE_SCALE] = snapshot.galleryImageScale.name
       it[FILE_PREVIEW_ENABLED] = snapshot.filePreviewEnabled
+      it[OPEN_WITH_ENABLED] = snapshot.openWithEnabled
       it[PRESIGNED_URL_EXPIRY_MINUTES] = snapshot.presignedUrlExpiryMinutes
       it[ALLOW_RECURSIVE_FOLDER_DELETE] = snapshot.allowRecursiveFolderDelete
       it[ADVANCED_SETTINGS_ENABLED] = snapshot.advancedSettingsEnabled
@@ -168,6 +174,7 @@ class SettingsRepository(private val context: Context) {
     val GALLERY_THUMBNAIL_SIZE = stringPreferencesKey("gallery_thumbnail_size")
     val GALLERY_IMAGE_SCALE = stringPreferencesKey("gallery_image_scale")
     val FILE_PREVIEW_ENABLED = booleanPreferencesKey("file_preview_enabled")
+    val OPEN_WITH_ENABLED = booleanPreferencesKey("open_with_enabled")
     val PRESIGNED_URL_EXPIRY_MINUTES = intPreferencesKey("presigned_url_expiry_minutes")
     val ALLOW_RECURSIVE_FOLDER_DELETE = booleanPreferencesKey("allow_recursive_folder_delete")
     val ADVANCED_SETTINGS_ENABLED = booleanPreferencesKey("advanced_settings_enabled")
@@ -190,6 +197,7 @@ data class AppSettingsSnapshot(
   val galleryThumbnailSize: GalleryThumbnailSize = GalleryThumbnailSize.MEDIUM,
   val galleryImageScale: GalleryImageScale = GalleryImageScale.FIT,
   val filePreviewEnabled: Boolean = true,
+  val openWithEnabled: Boolean = false,
   val presignedUrlExpiryMinutes: Int = DEFAULT_PRESIGNED_URL_EXPIRY_MINUTES,
   val allowRecursiveFolderDelete: Boolean = false,
   val advancedSettingsEnabled: Boolean = false,

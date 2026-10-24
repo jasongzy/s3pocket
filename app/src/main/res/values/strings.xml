@@ -272,6 +272,8 @@
         <item quantity="other">Imported %1$d profiles. Existing profiles with the same ID were updated.</item>
     </plurals>
     <string name="load_file_previews">Load file previews</string>
+    <string name="show_in_open_with">Show in Open with</string>
+    <string name="show_in_open_with_description">Open files from other apps to choose an upload destination</string>
     <string name="load_file_previews_description">Preview supported images, text, code, and videos on the details page.</string>
     <string name="signed_url_validity">Signed URL validity</string>
     <string name="allow_recursive_folder_delete">Allow recursive folder deletion</string>
@@ -296,13 +298,13 @@
         <item quantity="other">Uploaded %1$d files</item>
     </plurals>
     <plurals name="shared_files_waiting">
-        <item quantity="one">%1$d shared file is waiting</item>
-        <item quantity="other">%1$d shared files are waiting</item>
+        <item quantity="one">%1$d file is ready to upload</item>
+        <item quantity="other">%1$d files are ready to upload</item>
     </plurals>
     <string name="upload_here">Upload here</string>
     <plurals name="choose_shared_destination">
-        <item quantity="one">Choose a destination for the shared file</item>
-        <item quantity="other">Choose a destination for the %1$d shared files</item>
+        <item quantity="one">Choose an upload destination for the file</item>
+        <item quantity="other">Choose an upload destination for the %1$d files</item>
     </plurals>
     <string name="gallery_view">Gallery view</string>
     <string name="list_view">List view</string>

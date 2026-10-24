@@ -174,6 +174,13 @@ fun SettingsScreen(
       item {
         SettingsSection(title = stringResource(R.string.files_and_links)) {
           SettingsSwitchRow(
+            title = stringResource(R.string.show_in_open_with),
+            description = stringResource(R.string.show_in_open_with_description),
+            checked = snapshot.openWithEnabled,
+            onCheckedChange = viewModel::setOpenWithEnabled,
+          )
+          SettingsDivider()
+          SettingsSwitchRow(
             title = stringResource(R.string.load_file_previews),
             description = stringResource(R.string.load_file_previews_description),
             checked = filePreviewEnabled,

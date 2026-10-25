@@ -64,6 +64,7 @@ class S3ObjectStorage(
   private val httpClient: OkHttpClient,
   private val regionResolver: BucketRegionResolver,
   private val capabilities: StorageCapabilityCache,
+  private val onMetadataObserved: (String, String, Set<String>) -> Unit,
   private val onObjectsChanged: (String) -> Unit,
 ) : ObjectStorage {
   private val sdkHttpClient = httpClient.newBuilder()
@@ -129,6 +130,7 @@ class S3ObjectStorage(
       this.bucket = bucket
       this.key = key
     }
+    onMetadataObserved(bucket, key, response.metadata.orEmpty().keys)
     ObjectDetails(
       key = key,
       size = response.contentLength ?: 0,
@@ -138,6 +140,7 @@ class S3ObjectStorage(
       cacheControl = response.cacheControl,
       contentDisposition = response.contentDisposition,
       metadata = response.metadata.orEmpty().mapValues { decodeMetadataValue(it.value) }.toSortedMap(),
+      missingMetadataCount = response.missingMeta ?: 0,
     )
   }
 
@@ -161,6 +164,7 @@ class S3ObjectStorage(
     if (request.contentLength >= MULTIPART_THRESHOLD_BYTES && capabilities.supportsMultipart(profile)) {
       try {
         uploadMultipart(bucket, request, source, shouldCancel, onProgress)
+        onMetadataObserved(bucket, request.key, request.metadata.keys)
         return
       } catch (error: ServiceException) {
         if (error.sdkErrorMetadata.errorCode !in UNSUPPORTED_MULTIPART_ERRORS) throw error
@@ -184,6 +188,7 @@ class S3ObjectStorage(
     val builder = Request.Builder().url(signed.url.toString()).put(body)
     signed.headers.forEach { key, values -> builder.header(key, values.joinToString(", ")) }
     withContext(Dispatchers.IO) { execute(builder.build()) { onObjectsChanged(bucket) } }
+    onMetadataObserved(bucket, request.key, request.metadata.keys)
   }
 
   override suspend fun download(
@@ -497,6 +502,7 @@ class S3ObjectStorage(
       }
     }
     check(!copied.copyObjectResult?.eTag.isNullOrBlank()) { "S3 did not confirm the copied object" }
+    onMetadataObserved(bucket, move.targetKey, (update?.metadata ?: source.metadata.orEmpty()).keys)
     try {
       if (renamed) {
         deleteObject { this.bucket = bucket; key = move.sourceKey; ifMatch = etag }

@@ -1,4 +1,29 @@
 <resources>
+    <string name="metadata_filter">Filter by metadata</string>
+    <string name="metadata_filter_scope">Filter files in the current folder</string>
+    <string name="match_all">Match all</string>
+    <string name="match_any">Match any</string>
+    <string name="add_condition">Add condition</string>
+    <string name="remove_condition">Remove condition</string>
+    <string name="ignore_value_case">Ignore value case</string>
+    <string name="apply_filter">Apply</string>
+    <string name="clear_filter">Clear filter</string>
+    <string name="field_exists">Field exists</string>
+    <string name="field_missing">Field is missing</string>
+    <string name="value_empty">Value is empty</string>
+    <string name="value_not_empty">Value is not empty</string>
+    <string name="value_equals">Value equals</string>
+    <string name="value_not_equals">Value does not equal</string>
+    <string name="value_contains">Value contains</string>
+    <string name="value_not_contains">Value does not contain</string>
+    <plurals name="filter_conditions"><item quantity="one">%1$d condition</item><item quantity="other">%1$d conditions</item></plurals>
+    <string name="continue_scan">Continue</string>
+    <string name="metadata_scanning">Scanning · Checked: %1$d</string>
+    <string name="metadata_scan_complete">Finished · Checked: %1$d</string>
+    <string name="metadata_scan_incomplete">Partial results · Checked: %1$d</string>
+    <string name="metadata_matches">Matches: %1$d</string>
+    <string name="metadata_scan_error">Scan error · Unreadable: %1$d</string>
+    <string name="metadata_results_incomplete">Results are incomplete until the scan finishes successfully.</string>
     <plurals name="operation_canceled_progress">
         <item quantity="one">Canceled after completing %1$d/%2$d item</item>
         <item quantity="other">Canceled after completing %1$d/%2$d items</item>

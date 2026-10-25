@@ -22,6 +22,7 @@ data class ObjectDetails(
   val cacheControl: String?,
   val contentDisposition: String?,
   val metadata: Map<String, String>,
+  val missingMetadataCount: Int = 0,
 )
 
 data class UploadObject(

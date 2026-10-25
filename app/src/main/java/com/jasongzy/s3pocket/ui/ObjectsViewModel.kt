@@ -19,6 +19,10 @@ import com.jasongzy.s3pocket.data.model.FavoriteItem
 import com.jasongzy.s3pocket.data.model.FavoriteKind
 import com.jasongzy.s3pocket.data.model.ObjectItem
 import com.jasongzy.s3pocket.data.model.SharedUploadSource
+import com.jasongzy.s3pocket.data.model.MetadataFilter
+import com.jasongzy.s3pocket.data.storage.MetadataScan
+import com.jasongzy.s3pocket.data.storage.readObjectMetadata
+import com.jasongzy.s3pocket.data.storage.sampleObjectMetadata
 import com.jasongzy.s3pocket.data.storage.ObjectMove
 import com.jasongzy.s3pocket.data.storage.ObjectPage
 import com.jasongzy.s3pocket.data.storage.ObjectStorage
@@ -76,6 +80,9 @@ data class ObjectsUiState(
   val uploadKeyToOpen: String? = null,
   val nextContinuationToken: String? = null,
   val isLoadingAll: Boolean = false,
+  val metadataFilter: MetadataFilter? = null,
+  val metadataScan: MetadataScan = MetadataScan(),
+  val metadataKeys: List<String> = emptyList(),
 ) {
   val showListingProgress: Boolean
     get() = isLoadingAll && !isLoading && objects.isNotEmpty()
@@ -119,6 +126,8 @@ class ObjectsViewModel(
   @Volatile private var deleteCancelRequested = false
   @Volatile private var moveCancelRequested = false
   private var listingJob: Job? = null
+  private var metadataJob: Job? = null
+  private var metadataSampleJob: Job? = null
   private var loadedRevision: Long? = null
   private var completeListingRequired = false
   private val httpClient = OkHttpClient()
@@ -164,24 +173,28 @@ class ObjectsViewModel(
 
   private fun refreshListing(preserveError: Boolean = false) {
     listingJob?.cancel()
+    metadataJob?.cancel()
+    cancelMetadataSample()
     _state.update {
       it.copy(
         isLoading = true,
         nextContinuationToken = null,
         error = it.error.takeIf { preserveError },
         errorRes = it.errorRes.takeIf { preserveError },
+        metadataScan = MetadataScan(),
       )
     }
     loadPages(refresh = true)
   }
 
   fun loadMore() {
-    if (listingJob?.isActive == true || _state.value.nextContinuationToken == null) return
+    if (_state.value.metadataFilter != null || listingJob?.isActive == true || _state.value.nextContinuationToken == null) return
     loadPages(refresh = false)
   }
 
   fun setCompleteListingRequired(required: Boolean) {
     completeListingRequired = required
+    if (_state.value.metadataFilter != null) return
     _state.update { it.copy(isLoadingAll = required && listingJob?.isActive == true) }
     if (required) loadMore()
   }
@@ -195,7 +208,7 @@ class ObjectsViewModel(
         var replace = refresh
         loadObjectPages(
           initialToken = _state.value.nextContinuationToken,
-          loadAll = { completeListingRequired },
+          loadAll = { completeListingRequired && _state.value.metadataFilter == null },
           load = { storage.listObjects(bucket, prefix, it) },
         ) { page ->
           if (replace) loadedRevision = revision
@@ -213,6 +226,134 @@ class ObjectsViewModel(
         _state.update { it.copy(error = it.error ?: error.userMessage()) }
       }
       _state.update { it.copy(isLoading = false, isLoadingAll = false) }
+      if (_state.value.error == null && _state.value.metadataFilter != null) scanMetadata()
+    }
+  }
+
+  fun setMetadataFilter(filter: MetadataFilter?) {
+    require(filter == null || filter.isValid)
+    cancelMetadataSample()
+    _state.update { it.copy(metadataFilter = filter, isLoadingAll = false) }
+    if (filter == null) {
+      cancelMetadataScan()
+      if (completeListingRequired) loadMore()
+    } else if (listingJob?.isActive != true && !_state.value.isLoading) {
+      scanMetadata()
+    }
+  }
+
+  fun cancelMetadataScan() {
+    metadataJob?.cancel()
+    _state.update { it.copy(metadataScan = it.metadataScan.copy(running = false)) }
+  }
+
+  fun prepareMetadataKeys() {
+    fun updateKeys() {
+      _state.update { it.copy(metadataKeys = storageFactory.metadataKeys.keys(profileId, bucket, prefix)) }
+    }
+    updateKeys()
+    if (_state.value.isLoading || _state.value.metadataScan.running || _state.value.objects.none { !it.isFolder }) return
+    if (!storageFactory.metadataKeys.beginSample(profileId, bucket, prefix)) return
+    metadataSampleJob = viewModelScope.launch {
+      runSuspendCatching {
+        val profile = profiles.get(profileId)
+        val storage = storageFactory.create(profile)
+        sampleObjectMetadata(
+          items = _state.value.objects,
+          list = { storageFactory.listMetadata(profile, bucket, prefix, null, pageSize = 50) },
+          read = { key ->
+            val details = storage.getObjectDetails(bucket, key)
+            check(details.missingMetadataCount == 0) { "S3 omitted ${details.missingMetadataCount} metadata fields" }
+            details.metadata
+          },
+        ) { key, metadata ->
+          _state.update { it.copy(metadataScan = it.metadataScan.copy(values = it.metadataScan.values + (key to metadata))) }
+          updateKeys()
+        }
+      }.onFailure { AppLog.debug(TAG) { "Metadata key suggestions unavailable" } }
+    }
+  }
+
+  fun cancelMetadataSample() {
+    metadataSampleJob?.cancel()
+  }
+
+  fun scanMetadata() {
+    if (_state.value.metadataFilter == null || _state.value.isLoading || metadataJob?.isActive == true) return
+    if (_state.value.metadataScan.complete && _state.value.metadataScan.failed == 0) return
+    cancelMetadataSample()
+    metadataJob = viewModelScope.launch {
+      _state.update { it.copy(metadataScan = it.metadataScan.copy(running = true, complete = false, failed = 0, error = null)) }
+      runSuspendCatching {
+        val revision = storageFactory.revision(profileId, bucket)
+        val profile = profiles.get(profileId)
+        val storage = storageFactory.create(profile)
+        val initial = ObjectPage(_state.value.objects, _state.value.nextContinuationToken)
+        val attempted = _state.value.metadataScan.values.keys.toMutableSet()
+        fun mergeObjects(items: List<ObjectItem>) {
+          _state.update { it.copy(objects = (it.objects + items).distinctBy(ObjectItem::key)) }
+        }
+        suspend fun readMissing(items: List<ObjectItem>) {
+          val keys = items.filter { !it.isFolder && attempted.add(it.key) }.map { it.key }
+          readObjectMetadata(keys, { key ->
+            val details = storage.getObjectDetails(bucket, key)
+            check(details.missingMetadataCount == 0) { "S3 omitted ${details.missingMetadataCount} metadata fields" }
+            details.metadata
+          }) { key, result ->
+            _state.update { current ->
+              val scan = current.metadataScan
+              current.copy(metadataScan = result.fold(
+                onSuccess = { scan.copy(values = scan.values + (key to it)) },
+                onFailure = { scan.copy(failed = scan.failed + 1, error = scan.error ?: it.userMessage()) },
+              ))
+            }
+          }
+        }
+        val missing = initial.items.count { !it.isFolder && it.key !in attempted }
+        var batchComplete = false
+        if (initial.nextToken != null || missing > 1) {
+          var cursor: String? = null
+          val batchItems = mutableListOf<ObjectItem>()
+          do {
+            val page = runSuspendCatching { storageFactory.listMetadata(profile, bucket, prefix, cursor) }
+              .onFailure { AppLog.debug(TAG) { "Batch metadata unavailable; using S3 metadata requests" } }.getOrNull()
+              ?: break
+            batchItems += page.listing.items
+            mergeObjects(page.listing.items)
+            _state.update { it.copy(metadataScan = it.metadataScan.copy(values = it.metadataScan.values + page.metadata)) }
+            attempted += page.metadata.keys
+            readMissing(page.listing.items)
+            cursor = page.listing.nextToken
+            if (cursor == null) {
+              batchComplete = true
+              val keys = batchItems.mapTo(mutableSetOf(), ObjectItem::key)
+              _state.update {
+                it.copy(
+                  objects = batchItems.distinctBy(ObjectItem::key),
+                  nextContinuationToken = null,
+                  metadataScan = it.metadataScan.copy(values = it.metadataScan.values.filterKeys { key -> key in keys }),
+                )
+              }
+            }
+          } while (cursor != null)
+        }
+        if (!batchComplete) {
+          readMissing(_state.value.objects)
+          var token = initial.nextToken
+          while (token != null) {
+            val page = storage.listObjects(bucket, prefix, token)
+            mergeObjects(page.items)
+            _state.update { it.copy(nextContinuationToken = page.nextToken) }
+            readMissing(page.items)
+            token = page.nextToken
+          }
+        }
+        loadedRevision = revision
+        _state.update { it.copy(metadataScan = it.metadataScan.copy(complete = true)) }
+      }.onFailure { error ->
+        _state.update { it.copy(metadataScan = it.metadataScan.copy(error = error.userMessage())) }
+      }
+      _state.update { it.copy(metadataScan = it.metadataScan.copy(running = false)) }
     }
   }
 

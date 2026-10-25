@@ -62,6 +62,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -203,6 +205,8 @@ fun ObjectsScreen(
   val galleryThumbnailSize = settings.galleryThumbnailSize
   val galleryImageScale = settings.galleryImageScale
   var showMore by remember { mutableStateOf(false) }
+  var showMetadataFilter by rememberSaveable { mutableStateOf(false) }
+  var showMetadataError by remember { mutableStateOf(false) }
   var showGalleryOptions by remember { mutableStateOf(false) }
   var showUploadSources by remember { mutableStateOf(false) }
   var showUrlUpload by remember { mutableStateOf(false) }
@@ -214,13 +218,17 @@ fun ObjectsScreen(
     searchActive = false
     query = ""
   }
-  val displayedObjects = remember(state.objects, sort, ascending, query) {
+  val displayedObjects = remember(state.objects, sort, ascending, query, state.metadataFilter, state.metadataScan.values) {
     val comparator = when (sort) {
       ObjectSortMode.NAME -> compareBy<ObjectItem> { it.name.lowercase() }
       ObjectSortMode.DATE -> compareBy { it.lastModified }
       ObjectSortMode.SIZE -> compareBy { it.size }
     }
-    state.objects.filter { it.name.contains(query.trim(), ignoreCase = true) }.sortedWith(
+    val filter = state.metadataFilter
+    state.objects.filter { item ->
+      item.name.contains(query.trim(), ignoreCase = true) &&
+        (filter == null || filter.matches(item, state.metadataScan.values[item.key]))
+    }.sortedWith(
       compareByDescending<ObjectItem> { it.isFolder }.then(if (ascending) comparator else comparator.reversed())
     )
   }
@@ -474,6 +482,11 @@ fun ObjectsScreen(
                   }
                   DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
                     DropdownMenuItem(
+                      text = { Text(stringResource(R.string.metadata_filter)) },
+                      leadingIcon = { AppIcon(R.drawable.ms_filter_alt_24, null) },
+                      onClick = { showMore = false; showMetadataFilter = true },
+                    )
+                    DropdownMenuItem(
                       text = { Text(stringResource(R.string.refresh)) },
                       leadingIcon = { AppIcon(R.drawable.ms_refresh_24, null) },
                       onClick = { showMore = false; viewModel.refresh() },
@@ -572,6 +585,61 @@ fun ObjectsScreen(
     },
   ) { padding ->
     Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+      state.metadataFilter?.let { filter ->
+        val scan = state.metadataScan
+        Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)) {
+          Row(modifier = Modifier.padding(start = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { showMetadataFilter = true }) {
+              AppIcon(R.drawable.ms_filter_alt_24, null, Modifier.size(18.dp))
+              Spacer(Modifier.size(8.dp))
+              Text(pluralStringResource(R.plurals.filter_conditions, filter.conditions.size, filter.conditions.size))
+            }
+            Spacer(Modifier.weight(1f))
+            if (scan.running) {
+              TextButton(onClick = viewModel::cancelMetadataScan) { Text(stringResource(R.string.cancel)) }
+            } else if (!scan.complete || scan.failed > 0) {
+              TextButton(onClick = viewModel::scanMetadata, enabled = !state.isLoading) {
+                Text(stringResource(if (scan.error != null) R.string.retry else R.string.continue_scan))
+              }
+            }
+            TooltipIconButton(stringResource(R.string.clear_filter), { viewModel.setMetadataFilter(null) }) {
+              AppIcon(R.drawable.ms_close_24, null)
+            }
+          }
+          val status = when {
+            scan.running || state.isLoading -> R.string.metadata_scanning
+            scan.complete && scan.failed == 0 -> R.string.metadata_scan_complete
+            else -> R.string.metadata_scan_incomplete
+          }
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              stringResource(status, scan.values.size + scan.failed),
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.weight(1f),
+            )
+            Text(
+              stringResource(R.string.metadata_matches, displayedObjects.size),
+              style = MaterialTheme.typography.labelLarge,
+              color = MaterialTheme.colorScheme.primary,
+            )
+          }
+          if (scan.error != null) {
+            TextButton(onClick = { showMetadataError = true }, modifier = Modifier.padding(horizontal = 8.dp)) {
+              Text(
+                if (scan.failed > 0) stringResource(R.string.metadata_scan_error, scan.failed)
+                else stringResource(R.string.storage_request_failed),
+                color = MaterialTheme.colorScheme.error,
+              )
+            }
+          }
+          if (scan.running) LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+      }
       if (sharedUris.isNotEmpty() && !openSharedImmediately) {
         Row(
           modifier = Modifier
@@ -647,6 +715,13 @@ fun ObjectsScreen(
               PaddingValues(),
             )
           displayedObjects.isEmpty() && state.isLoadingAll -> LoadingPane(PaddingValues())
+          displayedObjects.isEmpty() && state.metadataFilter != null &&
+            (!state.metadataScan.complete || state.metadataScan.failed > 0) ->
+            MessagePane(
+              stringResource(R.string.no_search_results),
+              stringResource(R.string.metadata_results_incomplete),
+              PaddingValues(),
+            )
           displayedObjects.isEmpty() ->
             MessagePane(
               stringResource(R.string.no_search_results),
@@ -674,7 +749,7 @@ fun ObjectsScreen(
                 onLongClick = { selectedKeys = selectedKeys.toggle(item.key) },
               )
             }
-            if (state.nextContinuationToken != null && !state.isLoadingAll) {
+            if (state.nextContinuationToken != null && !state.isLoadingAll && state.metadataFilter == null) {
               item(key = "load-more-${state.nextContinuationToken}") {
                 LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
                 LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -703,7 +778,7 @@ fun ObjectsScreen(
                 onLongClick = { selectedKeys = selectedKeys.toggle(item.key) },
               )
             }
-            if (state.nextContinuationToken != null && !state.isLoadingAll) {
+            if (state.nextContinuationToken != null && !state.isLoadingAll && state.metadataFilter == null) {
               item(key = "load-more-${state.nextContinuationToken}") {
                 LaunchedEffect(state.nextContinuationToken) { viewModel.loadMore() }
                 LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
@@ -716,6 +791,27 @@ fun ObjectsScreen(
     }
   }
 
+  if (showMetadataFilter) {
+    LaunchedEffect(viewModel, state.isLoading) { viewModel.prepareMetadataKeys() }
+    DisposableEffect(viewModel) { onDispose { viewModel.cancelMetadataSample() } }
+    val metadataKeys = remember(state.metadataScan.values, state.metadataKeys, metadataTemplate) {
+      state.metadataScan.values.values.flatMap { it.keys } + state.metadataKeys + metadataTemplate.keys
+    }
+    MetadataFilterDialog(
+      initial = state.metadataFilter,
+      metadataKeys = metadataKeys,
+      onDismiss = { showMetadataFilter = false },
+      onApply = { viewModel.setMetadataFilter(it); showMetadataFilter = false },
+    )
+  }
+  if (showMetadataError && state.metadataScan.error != null) {
+    AlertDialog(
+      onDismissRequest = { showMetadataError = false },
+      title = { Text(stringResource(R.string.storage_request_failed)) },
+      text = { SelectionContainer(Modifier.verticalScroll(rememberScrollState())) { Text(state.metadataScan.error.orEmpty()) } },
+      confirmButton = { TextButton(onClick = { showMetadataError = false }) { Text(stringResource(R.string.ok)) } },
+    )
+  }
   if (showGalleryOptions) {
     GalleryOptionsDialog(
       thumbnailSize = galleryThumbnailSize,

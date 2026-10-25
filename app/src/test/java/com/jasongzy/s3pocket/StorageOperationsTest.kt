@@ -50,6 +50,19 @@ import org.junit.Test
 
 class StorageOperationsTest {
   @Test
+  fun headPreservesTheCountOfOmittedMetadataFields() = withStorage({ exchange ->
+    assertEquals("HEAD", exchange.requestMethod)
+    exchange.responseHeaders.add("x-amz-meta-tag", "visible")
+    exchange.responseHeaders.add("x-amz-missing-meta", "1")
+    exchange.sendResponseHeaders(200, -1)
+    exchange.close()
+  }) { storage ->
+    val details = storage.getObjectDetails("bucket", "file")
+    assertEquals(1, details.missingMetadataCount)
+    assertEquals(mapOf("tag" to "visible"), details.metadata)
+  }
+
+  @Test
   fun listingCancellationClosesResponsesSafely() {
     listOf(false, true).forEach { cancelParent ->
       val reading = CompletableDeferred<Unit>()
@@ -603,7 +616,9 @@ private fun withStorage(
     endpointUrl = "http://127.0.0.1:${server.address.port}", forcePathStyle = true,
   )
   try {
-    runBlocking { block(S3ObjectStorage(profile, client, BucketRegionResolver(client), StorageCapabilityCache(), onObjectsChanged)) }
+    runBlocking {
+      block(S3ObjectStorage(profile, client, BucketRegionResolver(client), StorageCapabilityCache(), { _, _, _ -> }, onObjectsChanged))
+    }
     errors.firstOrNull()?.let { throw it }
   } finally {
     server.stop(0)

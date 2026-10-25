@@ -1,4 +1,29 @@
 <resources>
+    <string name="metadata_filter">元数据筛选</string>
+    <string name="metadata_filter_scope">筛选当前目录中的文件</string>
+    <string name="match_all">全部满足</string>
+    <string name="match_any">任一满足</string>
+    <string name="add_condition">添加条件</string>
+    <string name="remove_condition">移除条件</string>
+    <string name="ignore_value_case">忽略值的大小写</string>
+    <string name="apply_filter">应用</string>
+    <string name="clear_filter">清除筛选</string>
+    <string name="field_exists">字段存在</string>
+    <string name="field_missing">字段不存在</string>
+    <string name="value_empty">值为空</string>
+    <string name="value_not_empty">值非空</string>
+    <string name="value_equals">值等于</string>
+    <string name="value_not_equals">值不等于</string>
+    <string name="value_contains">值包含</string>
+    <string name="value_not_contains">值不包含</string>
+    <plurals name="filter_conditions"><item quantity="other">%1$d 个条件</item></plurals>
+    <string name="continue_scan">继续</string>
+    <string name="metadata_scanning">正在扫描 · 已检查 %1$d 个文件</string>
+    <string name="metadata_scan_complete">扫描完成 · 已检查 %1$d 个文件</string>
+    <string name="metadata_scan_incomplete">部分结果 · 已检查 %1$d 个文件</string>
+    <string name="metadata_matches">匹配 %1$d 个</string>
+    <string name="metadata_scan_error">扫描出错 · %1$d 个文件无法读取</string>
+    <string name="metadata_results_incomplete">扫描尚未全部成功完成，当前结果不完整。</string>
     <plurals name="operation_canceled_progress">
         <item quantity="other">已取消，已完成 %1$d/%2$d 项</item>
     </plurals>

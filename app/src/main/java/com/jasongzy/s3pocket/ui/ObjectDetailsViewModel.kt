@@ -41,6 +41,7 @@ data class ObjectDetailsUiState(
   val accessUrlExpiresAt: Instant? = null,
   val isRefreshingUrl: Boolean = false,
   val isLoading: Boolean = true,
+  val isDeleted: Boolean = false,
   val isLoadingPreview: Boolean = false,
   val previewError: String? = null,
   val isDownloading: Boolean = false,
@@ -241,6 +242,27 @@ class ObjectDetailsViewModel(
     viewModelScope.launch {
       profiles.setFavorite(FavoriteItem(profileId, bucket, currentKey, FavoriteKind.FILE), enabled)
       onSaved()
+    }
+  }
+
+  fun delete() {
+    if (_state.value.isLoading) return
+    loadJob?.cancel()
+    urlJob?.cancel()
+    viewModelScope.launch {
+      _state.update { it.copy(isLoading = true, isLoadingPreview = false, isRefreshingUrl = false, error = null) }
+      runSuspendCatching {
+        val profile = profiles.get(profileId)
+        storageFactory.create(profile).deleteObjects(bucket, listOf(currentKey), { false }) { deleted ->
+          if (currentKey in deleted) {
+            profiles.setFavorite(FavoriteItem(profileId, bucket, currentKey, FavoriteKind.FILE), false)
+          }
+        }
+      }.onSuccess { _state.update { it.copy(isDeleted = true) } }
+        .onFailure { error ->
+          AppLog.error(TAG, error) { "DeleteObject failed" }
+          _state.update { it.copy(isLoading = false, error = error.userMessage()) }
+        }
     }
   }
 

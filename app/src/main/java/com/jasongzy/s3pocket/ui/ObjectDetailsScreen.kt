@@ -8,6 +8,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.text.format.DateUtils
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -38,10 +39,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -107,12 +110,21 @@ fun ObjectDetailsScreen(
   val state by viewModel.state.collectAsStateWithLifecycle()
   val favorites by viewModel.favorites.collectAsStateWithLifecycle()
   var editing by remember { mutableStateOf(false) }
+  var deleting by rememberSaveable { mutableStateOf(false) }
   val fileName = key.substringAfterLast('/').ifBlank { "download" }
   val favorite = remember(profileId, bucket, key) { FavoriteItem(profileId, bucket, key, FavoriteKind.FILE) }
   val isFavorite = favorites.any { it.id == favorite.id }
   val download = rememberLauncherForActivityResult(
     ActivityResultContracts.CreateDocument(state.details?.contentType ?: "application/octet-stream")
   ) { uri -> if (uri != null) viewModel.download(uri) }
+
+  if (state.isDeleted) {
+    val message = pluralStringResource(R.plurals.deleted_count, 1, 1)
+    LaunchedEffect(viewModel) {
+      Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+      onBack()
+    }
+  }
 
   Scaffold(
     topBar = {
@@ -130,6 +142,13 @@ fun ObjectDetailsScreen(
             { viewModel.setFavorite(!isFavorite) { context.showFavoriteToast(!isFavorite) } },
           ) {
             AppIcon(if (isFavorite) R.drawable.ms_star_24 else R.drawable.ms_star_outline_24, null)
+          }
+          TooltipIconButton(
+            stringResource(R.string.delete),
+            { deleting = true },
+            enabled = !state.isLoading,
+          ) {
+            AppIcon(R.drawable.ms_delete_24, null)
           }
           state.accessUrl?.let { url ->
             TooltipIconButton(stringResource(R.string.share_link), { context.shareUrl(url) }) {
@@ -175,6 +194,17 @@ fun ObjectDetailsScreen(
           if (savedKey != key) onRenamed(savedKey)
         }
       },
+    )
+  }
+  if (deleting && !state.isDeleted) {
+    DeleteObjectsDialog(
+      fileCount = 1,
+      folderCount = 0,
+      objectKey = key,
+      isDeleting = state.isLoading,
+      error = state.error,
+      onDismiss = { deleting = false },
+      onConfirm = viewModel::delete,
     )
   }
 }

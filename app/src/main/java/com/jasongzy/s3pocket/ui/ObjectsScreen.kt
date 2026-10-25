@@ -779,52 +779,22 @@ fun ObjectsScreen(
     )
   }
   deletingItems?.let { items ->
-    AlertDialog(
-      onDismissRequest = { deletingItems = null },
-      icon = { AppIcon(R.drawable.ms_warning_24, null, tint = MaterialTheme.colorScheme.error) },
-      title = { Text(pluralStringResource(R.plurals.delete_items_title, items.size, items.size)) },
-      text = { Text(stringResource(R.string.delete_items_description)) },
-      confirmButton = {
-        TextButton(
-          onClick = { viewModel.requestDelete(items); deletingItems = null },
-          colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-        ) {
-          Text(stringResource(R.string.delete))
-        }
-      },
-      dismissButton = { TextButton(onClick = { deletingItems = null }) { Text(stringResource(R.string.cancel)) } },
+    val folderCount = items.count { it.isFolder }
+    DeleteObjectsDialog(
+      fileCount = items.size - folderCount,
+      folderCount = folderCount,
+      onDismiss = { deletingItems = null },
+      onConfirm = { viewModel.requestDelete(items); deletingItems = null },
     )
   }
   state.pendingRecursiveDelete?.let { items ->
-    AlertDialog(
-      onDismissRequest = viewModel::cancelRecursiveDelete,
-      icon = { AppIcon(R.drawable.ms_warning_24, null, tint = MaterialTheme.colorScheme.error) },
-      title = {
-        Text(
-          stringResource(R.string.recursive_delete_title),
-          color = MaterialTheme.colorScheme.error,
-        )
-      },
-      text = {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-          Text(stringResource(R.string.recursive_delete_description))
-          Text(
-            pluralStringResource(R.plurals.recursive_delete_selection, items.size, items.size),
-            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-          )
-        }
-      },
-      confirmButton = {
-        TextButton(
-          onClick = viewModel::confirmRecursiveDelete,
-          colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-        ) {
-          Text(stringResource(R.string.delete_everything))
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = viewModel::cancelRecursiveDelete) { Text(stringResource(R.string.cancel)) }
-      },
+    val folderCount = items.count { it.isFolder }
+    DeleteObjectsDialog(
+      fileCount = items.size - folderCount,
+      folderCount = folderCount,
+      recursive = true,
+      onDismiss = viewModel::cancelRecursiveDelete,
+      onConfirm = viewModel::confirmRecursiveDelete,
     )
   }
   movingItems?.let { items ->

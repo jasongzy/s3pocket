@@ -30,7 +30,23 @@
         <item quantity="one">Delete %1$d item?</item>
         <item quantity="other">Delete %1$d items?</item>
     </plurals>
-    <string name="delete_items_description">Selected files and folders will be deleted permanently.</string>
+    <string name="delete_items_description">The selected files, folders, and their contents will be permanently deleted.</string>
+    <plurals name="delete_files_title">
+        <item quantity="one">Delete %1$d file?</item>
+        <item quantity="other">Delete %1$d files?</item>
+    </plurals>
+    <plurals name="delete_files_description">
+        <item quantity="one">The selected file will be permanently deleted.</item>
+        <item quantity="other">The selected files will be permanently deleted.</item>
+    </plurals>
+    <plurals name="delete_folders_title">
+        <item quantity="one">Delete %1$d folder?</item>
+        <item quantity="other">Delete %1$d folders?</item>
+    </plurals>
+    <plurals name="delete_folders_description">
+        <item quantity="one">The selected folder and its contents will be permanently deleted.</item>
+        <item quantity="other">The selected folders and their contents will be permanently deleted.</item>
+    </plurals>
     <plurals name="move_items_title">
         <item quantity="one">Move %1$d item?</item>
         <item quantity="other">Move %1$d items?</item>
@@ -52,6 +68,8 @@
     <string name="error_recursive_delete_disabled">Recursive folder deletion is disabled in Settings.</string>
     <string name="recursive_delete_title">Permanently delete non-empty folders?</string>
     <string name="recursive_delete_description">This will recursively delete every object inside the selected folders. This action cannot be undone.</string>
+    <string name="recursive_delete_mixed_title">Permanently delete files and non-empty folders?</string>
+    <string name="recursive_delete_mixed_description">This will delete the selected files and recursively delete every object inside the selected folders. This action cannot be undone.</string>
     <plurals name="recursive_delete_selection"><item quantity="one">%1$d selected item will be processed.</item><item quantity="other">%1$d selected items will be processed.</item></plurals>
     <string name="delete_everything">Delete everything</string>
     <string name="preparing_deletion">Preparing deletion…</string>

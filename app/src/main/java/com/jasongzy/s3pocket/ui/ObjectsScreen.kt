@@ -18,6 +18,7 @@ import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
@@ -30,8 +31,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
@@ -41,6 +44,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.nonInteractiveScrollbar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -190,6 +194,12 @@ fun ObjectsScreen(
   val sort = settings.objectSort
   val ascending = settings.objectSortAscending
   val viewMode = settings.objectViewMode
+  val listState = rememberLazyListState()
+  val gridState = rememberLazyGridState()
+  val scrollIndicator = if (viewMode == ObjectViewMode.GALLERY) gridState.scrollIndicatorState else listState.scrollIndicatorState
+  val scrollbarModifier = scrollIndicator?.let {
+    Modifier.nonInteractiveScrollbar(it, orientation = Orientation.Vertical)
+  } ?: Modifier
   val galleryThumbnailSize = settings.galleryThumbnailSize
   val galleryImageScale = settings.galleryImageScale
   var showMore by remember { mutableStateOf(false) }
@@ -645,7 +655,8 @@ fun ObjectsScreen(
             )
           viewMode == ObjectViewMode.GALLERY -> LazyVerticalGrid(
             columns = GridCells.Fixed(galleryThumbnailSize.columns),
-            modifier = Modifier.fillMaxSize(),
+            state = gridState,
+            modifier = Modifier.fillMaxSize().then(scrollbarModifier),
             contentPadding = PaddingValues(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -671,7 +682,11 @@ fun ObjectsScreen(
             }
             item { Spacer(Modifier.size(88.dp)) }
           }
-          else -> LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          else -> LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().then(scrollbarModifier),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+          ) {
             items(displayedObjects, key = { it.key }) { item ->
               ObjectRow(
                 item = item,

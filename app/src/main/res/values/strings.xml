@@ -113,7 +113,8 @@
     <string name="object_count">Objects</string>
     <string name="class_a_operations">Class A operations this month</string>
     <string name="class_b_operations">Class B operations this month</string>
-    <string name="metrics_delay">Cloudflare metrics can be delayed and operation totals cover the current UTC calendar month.</string>
+    <string name="operations_usage">%1$,d / %2$,d</string>
+    <string name="metrics_note">Cloudflare metrics may be delayed; operation totals cover the current UTC calendar month; R2 Standard free tier limits are for reference only, with actual charges subject to &lt;a href=\"https://developers.cloudflare.com/r2/pricing/\"&gt;official R2 pricing&lt;/a&gt;.</string>
     <string name="settings">Settings</string>
     <string name="connect_storage">Connect your storage</string>
     <string name="connect_storage_description">Add an S3-compatible or Cloudflare R2 connection to browse object storage.</string>

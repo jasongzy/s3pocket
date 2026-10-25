@@ -87,7 +87,8 @@
     <string name="object_count">对象数</string>
     <string name="class_a_operations">本月 A 类操作</string>
     <string name="class_b_operations">本月 B 类操作</string>
-    <string name="metrics_delay">Cloudflare 指标可能存在延迟；操作统计按当前 UTC 自然月计算。</string>
+    <string name="operations_usage">%1$,d / %2$,d</string>
+    <string name="metrics_note">Cloudflare 指标可能存在延迟；操作统计按当前 UTC 自然月计算；R2 Standard 免费额度标准仅供参考，实际以 &lt;a href=\"https://developers.cloudflare.com/r2/pricing/\"&gt;R2 官方定价&lt;/a&gt;为准</string>
     <string name="settings">设置</string>
     <string name="connect_storage">连接对象存储</string>
     <string name="connect_storage_description">添加一个存储连接，即可浏览存储桶、查看元数据和传输文件。</string>

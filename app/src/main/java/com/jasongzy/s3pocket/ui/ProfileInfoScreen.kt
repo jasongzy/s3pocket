@@ -17,6 +17,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -24,10 +25,17 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.fromHtml
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -36,6 +44,7 @@ import com.jasongzy.s3pocket.R
 import com.jasongzy.s3pocket.data.CloudflareMetricsRepository
 import com.jasongzy.s3pocket.data.ProfileStoreState
 import com.jasongzy.s3pocket.data.model.StorageProvider
+import java.text.NumberFormat
 import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,10 +132,18 @@ fun ProfileInfoScreen(
               state.metrics?.let { metrics ->
                 MetricRow(stringResource(R.string.storage_used), formatBytes(metrics.storageBytes))
                 MetricRow(stringResource(R.string.object_count), metrics.objectCount.toString())
-                MetricRow(stringResource(R.string.class_a_operations), metrics.classAOperations.toString())
-                MetricRow(stringResource(R.string.class_b_operations), metrics.classBOperations.toString())
+                OperationsUsage(stringResource(R.string.class_a_operations), metrics.classAOperations, 1_000_000)
+                OperationsUsage(stringResource(R.string.class_b_operations), metrics.classBOperations, 10_000_000)
                 Text(
-                  stringResource(R.string.metrics_delay),
+                  AnnotatedString.fromHtml(
+                    stringResource(R.string.metrics_note),
+                    linkStyles = TextLinkStyles(
+                      style = SpanStyle(
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline,
+                      ),
+                    ),
+                  ),
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -159,6 +176,36 @@ private fun MetricRow(label: String, value: String) {
   Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
     Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Text(value)
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OperationsUsage(label: String, used: Long, allowance: Long) {
+  val fraction = used.toDouble() / allowance
+  val locale = LocalConfiguration.current.locales[0]
+  val percentFormat = remember(locale) {
+    NumberFormat.getPercentInstance(locale).apply { maximumFractionDigits = 1 }
+  }
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+      Text(
+        stringResource(R.string.operations_usage, used, allowance),
+        modifier = Modifier.weight(1f),
+        style = MaterialTheme.typography.bodyMedium,
+      )
+      Text(
+        percentFormat.format(fraction),
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+      )
+    }
+    LinearWavyProgressIndicator(
+      progress = { fraction.toFloat().coerceIn(0f, 1f) },
+      modifier = Modifier.fillMaxWidth(),
+      waveSpeed = 0.dp,
+    )
   }
 }
 

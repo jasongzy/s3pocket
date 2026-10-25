@@ -18,6 +18,7 @@ import com.jasongzy.s3pocket.data.SettingsRepository
 import com.jasongzy.s3pocket.data.model.FavoriteItem
 import com.jasongzy.s3pocket.data.model.FavoriteKind
 import com.jasongzy.s3pocket.data.model.ObjectItem
+import com.jasongzy.s3pocket.data.model.SharedUploadSource
 import com.jasongzy.s3pocket.data.storage.ObjectMove
 import com.jasongzy.s3pocket.data.storage.ObjectPage
 import com.jasongzy.s3pocket.data.storage.ObjectStorage
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -70,15 +72,22 @@ data class ObjectsUiState(
   val moveCanceled: Boolean = false,
   val partialProgress: ItemProgress? = null,
   val uploadProgress: UploadProgress? = null,
-  val uploadResult: ItemProgress? = null,
+  val uploadResult: UploadResult? = null,
+  val uploadKeyToOpen: String? = null,
   val nextContinuationToken: String? = null,
   val isLoadingAll: Boolean = false,
 ) {
   val showListingProgress: Boolean
     get() = isLoadingAll && !isLoading && objects.isNotEmpty()
+
+  val uploadedObjectKey: String?
+    get() = uploadKeyToOpen.takeIf { uploadResult?.completed == 1 && uploadResult?.total == 1 }
 }
 
 data class ItemProgress(val completed: Int, val total: Int)
+
+// Separate completions must stay distinct even when their counts match.
+class UploadResult(val completed: Int, val total: Int)
 
 data class UploadProgress(
   val completed: Int,
@@ -95,6 +104,7 @@ data class BatchUploadItem(
   val contentType: String,
   val contentLength: Long,
   val metadata: Map<String, String>,
+  val sharedSource: SharedUploadSource? = null,
 )
 
 class ObjectsViewModel(
@@ -116,6 +126,7 @@ class ObjectsViewModel(
   private var sourceJob: Job? = null
   private val _state = MutableStateFlow(ObjectsUiState())
   private val uploadIds = MutableStateFlow(emptySet<String>())
+  private var openAfterUpload = false
   val state: StateFlow<ObjectsUiState> = _state
   val favorites: StateFlow<List<FavoriteItem>> =
     profiles.favorites.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -132,7 +143,7 @@ class ObjectsViewModel(
           )
         }
         if (!progress.active && progress.error == null) {
-          _state.update { it.copy(uploadResult = ItemProgress(progress.completed, progress.total)) }
+          _state.update { it.copy(uploadResult = UploadResult(progress.completed, progress.total)) }
           refresh()
           val finishedIds = uploads.mapTo(mutableSetOf()) { it.id }
           transferManager.dismissFinished(finishedIds)
@@ -207,8 +218,9 @@ class ObjectsViewModel(
 
   fun upload(
     uri: Uri, key: String, contentType: String, contentLength: Long, metadata: Map<String, String>, overwrite: Boolean = false,
+    sharedSource: SharedUploadSource? = null,
   ) {
-    enqueueUploads(listOf(BatchUploadItem(uri, key, contentType, contentLength, metadata)), overwrite)
+    enqueueUploads(listOf(BatchUploadItem(uri, key, contentType, contentLength, metadata, sharedSource)), overwrite)
   }
 
   fun uploadBatch(items: List<BatchUploadItem>, overwrite: Boolean = false) {
@@ -233,13 +245,22 @@ class ObjectsViewModel(
   private fun enqueueUploads(items: List<BatchUploadItem>, overwrite: Boolean) {
     if (items.isEmpty()) return
     val ids = transferManager.enqueue(items.map {
-      UploadTransfer(profileId, bucket, it.uri, it.key, it.contentType, it.contentLength, it.metadata, overwrite)
+      UploadTransfer(profileId, bucket, it.uri, it.key, it.contentType, it.contentLength, it.metadata, overwrite, it.sharedSource)
     })
-    _state.update { it.copy(isUploading = true, uploadProgress = UploadProgress(0, items.size, active = true)) }
+    _state.update {
+      it.copy(
+        isUploading = true,
+        uploadProgress = UploadProgress(0, items.size, active = true),
+        uploadResult = null,
+        uploadKeyToOpen = items.singleOrNull()?.key.takeIf { openAfterUpload && uploadIds.value.isEmpty() },
+      )
+    }
+    openAfterUpload = false
     uploadIds.update { it + ids }
   }
 
   fun cancelUploads() {
+    cancelUploadNavigation()
     if (transferManager.items.value.any {
         it.id in uploadIds.value && (it.status == TransferStatus.QUEUED || it.status == TransferStatus.RUNNING)
       }) {
@@ -257,7 +278,17 @@ class ObjectsViewModel(
       .forEach { transferManager.retry(it.id) }
   }
 
-  fun consumeUploadResult() = _state.update { it.copy(uploadResult = null) }
+  fun prepareUploadNavigation() {
+    cancelUploadNavigation()
+    openAfterUpload = true
+  }
+
+  fun cancelUploadNavigation() {
+    openAfterUpload = false
+    _state.update { it.copy(uploadKeyToOpen = null) }
+  }
+
+  fun consumeUploadResult(result: UploadResult): String? = _state.consumeUploadResult(result)
 
   fun createFolder(name: String) {
     if (_state.value.isWorking) return
@@ -610,6 +641,14 @@ class ObjectsViewModel(
   private companion object {
     const val TAG = "S3Pocket.Objects"
   }
+}
+
+internal fun MutableStateFlow<ObjectsUiState>.consumeUploadResult(result: UploadResult): String? {
+  val previous = getAndUpdate { current ->
+    if (current.uploadResult === result) current.copy(uploadResult = null, uploadKeyToOpen = null)
+    else current
+  }
+  return previous.uploadedObjectKey.takeIf { previous.uploadResult === result }
 }
 
 internal fun uploadProgress(items: List<TransferItem>): UploadProgress =

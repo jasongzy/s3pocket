@@ -302,6 +302,10 @@
         <item quantity="other">%1$d files are ready to upload</item>
     </plurals>
     <string name="upload_here">Upload here</string>
+    <string name="upload_canceled">Upload canceled</string>
+    <string name="replace">Replace</string>
+    <string name="replace_shared_files_title">Replace pending files?</string>
+    <string name="replace_shared_files_description">Pending files: %1$d\nNew files: %2$d\n\nUploads already started will continue.</string>
     <plurals name="choose_shared_destination">
         <item quantity="one">Choose an upload destination for the file</item>
         <item quantity="other">Choose an upload destination for the %1$d files</item>

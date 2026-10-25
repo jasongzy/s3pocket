@@ -42,9 +42,12 @@ import com.jasongzy.s3pocket.data.AppSettingsSnapshot
 fun MainNavigation(
   settings: AppSettingsSnapshot,
   sharedUris: List<Uri>,
+  sharedRequestId: String,
   openSharedImmediately: Boolean,
+  isConfirmingSharedFiles: Boolean,
   onUploadDestinationChanged: (Boolean) -> Unit,
-  onSharedUrisConsumed: (List<Uri>) -> Boolean,
+  onSharedUrisOpened: (String) -> Boolean,
+  onDismissSharedFiles: () -> Unit,
 ) {
   val backStack = rememberNavBackStack(ProfilesRoute)
   val application = LocalContext.current.applicationContext as S3PocketApplication
@@ -144,7 +147,11 @@ fun MainNavigation(
             thumbnailUrls = container.thumbnailUrls,
             onBack = { backStack.popIfCurrent(route) },
             onOpenFolder = { backStack.add(ObjectsRoute(route.profileId, route.bucket, it)) },
-            onOpenObject = { backStack.add(ObjectDetailsRoute(route.profileId, route.bucket, it)) },
+            onOpenObject = {
+              if (backStack.lastOrNull() == route) {
+                backStack.add(ObjectDetailsRoute(route.profileId, route.bucket, it))
+              }
+            },
             onNavigateToPrefix = { targetPrefix ->
               val ancestorIndex = backStack.indexOfLast { candidate ->
                 candidate is ObjectsRoute && candidate.profileId == route.profileId &&
@@ -158,8 +165,11 @@ fun MainNavigation(
               }
             },
             sharedUris = sharedUris,
+            sharedRequestId = sharedRequestId,
             openSharedImmediately = openSharedImmediately && backStack.lastOrNull() == route,
-            onSharedUrisConsumed = { onSharedUrisConsumed(sharedUris) },
+            isConfirmingSharedFiles = isConfirmingSharedFiles,
+            onSharedUrisOpened = { onSharedUrisOpened(sharedRequestId) },
+            onDismissSharedFiles = onDismissSharedFiles,
           )
         }
         entry<ObjectDetailsRoute> { route ->

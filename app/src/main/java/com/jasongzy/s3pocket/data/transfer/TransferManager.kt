@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.core.content.ContextCompat
 import com.jasongzy.s3pocket.data.ProfileRepository
 import com.jasongzy.s3pocket.data.model.UploadObject
+import com.jasongzy.s3pocket.data.model.SharedUploadSource
 import com.jasongzy.s3pocket.data.storage.StorageFactory
 import com.jasongzy.s3pocket.data.storage.TransferCanceledException
 import com.jasongzy.s3pocket.data.storage.UploadSource
@@ -54,6 +55,7 @@ data class UploadTransfer(
   override val contentLength: Long,
   val metadata: Map<String, String>,
   val overwrite: Boolean = false,
+  val sharedSource: SharedUploadSource? = null,
 ) : TransferRequest
 
 data class DownloadTransfer(
@@ -77,6 +79,12 @@ class TransferManager(
   private val retained = mutableSetOf<String>()
   private val _items = MutableStateFlow<List<TransferItem>>(emptyList())
   val items: StateFlow<List<TransferItem>> = _items
+  private val _uploadedSharedFiles = MutableStateFlow<List<SharedUploadSource>>(emptyList())
+  val uploadedSharedFiles: StateFlow<List<SharedUploadSource>> = _uploadedSharedFiles
+
+  fun consumeUploadedSharedFiles(files: List<SharedUploadSource>) {
+    _uploadedSharedFiles.update { it - files.toSet() }
+  }
 
   fun enqueue(requests: List<UploadTransfer>): List<String> = enqueueRequests(requests)
 
@@ -210,6 +218,9 @@ class TransferManager(
                 onProgress = reportProgress,
               )
             } ?: error("Unable to open destination")
+          }
+          (request as? UploadTransfer)?.sharedSource?.let { source ->
+            _uploadedSharedFiles.update { it + source }
           }
           update(id) { it.copy(completedBytes = transferredBytes, totalBytes = transferredBytes, status = TransferStatus.COMPLETED) }
           cleanupFinished(id)

@@ -68,7 +68,8 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jasongzy.s3pocket.R
@@ -83,6 +84,7 @@ import com.jasongzy.s3pocket.data.SettingsRepository
 import com.jasongzy.s3pocket.data.model.FavoriteKind
 import com.jasongzy.s3pocket.data.model.FavoriteItem
 import com.jasongzy.s3pocket.data.model.ObjectItem
+import com.jasongzy.s3pocket.data.model.SharedUploadSource
 import com.jasongzy.s3pocket.data.storage.StorageFactory
 import com.jasongzy.s3pocket.data.storage.ThumbnailUrlRepository
 import com.jasongzy.s3pocket.data.transfer.TransferManager
@@ -98,6 +100,7 @@ internal data class SelectedDocument(
   val contentType: String,
   val size: Long,
   val sourceUrl: String? = null,
+  val sharedSource: SharedUploadSource? = null,
 )
 
 private data class PendingUpload(
@@ -129,8 +132,11 @@ fun ObjectsScreen(
   onOpenObject: (String) -> Unit,
   onNavigateToPrefix: (String) -> Unit,
   sharedUris: List<Uri>,
+  sharedRequestId: String,
   openSharedImmediately: Boolean,
-  onSharedUrisConsumed: () -> Boolean,
+  isConfirmingSharedFiles: Boolean,
+  onSharedUrisOpened: () -> Boolean,
+  onDismissSharedFiles: () -> Unit,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -146,7 +152,11 @@ fun ObjectsScreen(
     )
   }
   val state by viewModel.state.collectAsStateWithLifecycle()
-  LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshIfChanged() }
+  val lifecycle = LocalLifecycleOwner.current.lifecycle
+  LifecycleResumeEffect(viewModel) {
+    viewModel.refreshIfChanged()
+    onPauseOrDispose { viewModel.cancelUploadNavigation() }
+  }
   val stagingSession = remember(transferManager) { transferManager.staging.openSession() }
   DisposableEffect(stagingSession) {
     onDispose { stagingSession.close() }
@@ -155,7 +165,7 @@ fun ObjectsScreen(
   val metadataTemplate = settings.metadataTemplate
   var selected by remember { mutableStateOf<SelectedDocument?>(null) }
   var sharedDocuments by remember { mutableStateOf<List<SelectedDocument>?>(null) }
-  var openSharedRequested by remember(sharedUris) { mutableStateOf(false) }
+  var openSharedRequested by remember(sharedRequestId) { mutableStateOf(false) }
   var selectionError by remember { mutableStateOf<String?>(null) }
   var isScanningFolder by remember { mutableStateOf(false) }
   var selectedKeys by remember(prefix) { mutableStateOf(emptySet<String>()) }
@@ -167,6 +177,7 @@ fun ObjectsScreen(
   var uploadCheck by remember { mutableStateOf<Job?>(null) }
   fun checkUpload(action: suspend () -> Unit) {
     if (uploadCheck != null) return
+    if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) viewModel.prepareUploadNavigation()
     uploadCheck = scope.launch(start = CoroutineStart.LAZY) {
       try {
         runSuspendCatching { action() }.onFailure { selectionError = it.userMessage() }
@@ -254,10 +265,39 @@ fun ObjectsScreen(
       }
     }
   }
-  LaunchedEffect(sharedUris, openSharedImmediately, openSharedRequested) {
-    if (sharedUris.isEmpty() || !(openSharedImmediately || openSharedRequested)) return@LaunchedEffect
-    val results = sharedUris.map { uri -> runSuspendCatching { context.contentResolver.document(uri, unknownFileSize) } }
-    if (!onSharedUrisConsumed()) return@LaunchedEffect
+  fun isUploadBusy(): Boolean =
+    selected != null || sharedDocuments != null || pendingUpload != null || pendingBatchUpload != null ||
+      uploadCheck != null || state.uploadProgress != null || showUrlUpload || isScanningFolder ||
+      state.isDownloadingSource || state.downloadedSource != null
+
+  LaunchedEffect(sharedRequestId) {
+    if (sharedUris.isNotEmpty()) viewModel.cancelUploadNavigation()
+    val draftRequestId = (selected?.sharedSource ?: sharedDocuments?.firstOrNull()?.sharedSource ?:
+      pendingUpload?.document?.sharedSource ?: pendingBatchUpload?.documents?.firstOrNull()?.sharedSource)?.requestId
+    if (draftRequestId != null && draftRequestId != sharedRequestId) {
+      uploadCheck?.cancel()
+      selected = null
+      sharedDocuments = null
+      pendingUpload = null
+      pendingBatchUpload = null
+    }
+  }
+  LaunchedEffect(sharedRequestId, sharedUris, openSharedImmediately, openSharedRequested, isConfirmingSharedFiles) {
+    if (isConfirmingSharedFiles || sharedUris.isEmpty() || !(openSharedImmediately || openSharedRequested)) return@LaunchedEffect
+    if (isUploadBusy()) {
+      onSharedUrisOpened()
+      openSharedRequested = false
+      return@LaunchedEffect
+    }
+    val results = sharedUris.map { uri ->
+      runSuspendCatching {
+        context.contentResolver.document(uri, unknownFileSize)
+          .copy(sharedSource = SharedUploadSource(sharedRequestId, uri))
+      }
+    }
+    if (!onSharedUrisOpened()) return@LaunchedEffect
+    openSharedRequested = false
+    if (isUploadBusy()) return@LaunchedEffect
     results.firstOrNull { it.isFailure }?.exceptionOrNull()?.let { selectionError = it.userMessage() }
     val documents = results.mapNotNull(Result<SelectedDocument>::getOrNull)
     if (documents.size == 1) selected = documents.first()
@@ -278,8 +318,11 @@ fun ObjectsScreen(
       pluralStringResource(R.plurals.operation_canceled_progress, result.total, result.completed, result.total)
     }
     LaunchedEffect(result) {
+      val uploadedKey = viewModel.consumeUploadResult(result)
       Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-      viewModel.consumeUploadResult()
+      if (uploadedKey != null && !isConfirmingSharedFiles && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+        onOpenObject(uploadedKey)
+      }
     }
   }
   if (state.deleteCanceled) {
@@ -535,7 +578,7 @@ fun ObjectsScreen(
           TextButton(onClick = { openSharedRequested = true }, enabled = !openSharedRequested) {
             Text(stringResource(R.string.upload_here))
           }
-          TooltipIconButton(stringResource(R.string.cancel), { onSharedUrisConsumed() }) {
+          TooltipIconButton(stringResource(R.string.cancel), onDismissSharedFiles) {
             AppIcon(R.drawable.ms_close_24, null)
           }
         }
@@ -685,7 +728,7 @@ fun ObjectsScreen(
           if (viewModel.hasUploadConflicts(listOf(key))) {
             pendingUpload = PendingUpload(document, key, type, metadata)
           } else {
-            viewModel.upload(document.uri, key, type, document.size, metadata)
+            viewModel.upload(document.uri, key, type, document.size, metadata, sharedSource = document.sharedSource)
           }
           selected = null
         }
@@ -813,13 +856,19 @@ fun ObjectsScreen(
           TextButton(onClick = {
             checkUpload {
               val key = viewModel.availableUploadKeys(listOf(upload.key)).single()
-              viewModel.upload(upload.document.uri, key, upload.contentType, upload.document.size, upload.metadata)
+              viewModel.upload(
+                upload.document.uri, key, upload.contentType, upload.document.size, upload.metadata,
+                sharedSource = upload.document.sharedSource,
+              )
               pendingUpload = null
             }
           }) { Text(stringResource(R.string.auto_rename)) }
           TextButton(onClick = {
             checkUpload {
-              viewModel.upload(upload.document.uri, upload.key, upload.contentType, upload.document.size, upload.metadata, overwrite = true)
+              viewModel.upload(
+                upload.document.uri, upload.key, upload.contentType, upload.document.size, upload.metadata,
+                overwrite = true, sharedSource = upload.document.sharedSource,
+              )
               pendingUpload = null
             }
           }) { Text(stringResource(R.string.overwrite)) }
@@ -962,7 +1011,7 @@ private fun List<SelectedDocument>.toBatchUploadItems(
 ): List<BatchUploadItem> {
   require(keys.size == size)
   return zip(keys) { document, key ->
-    BatchUploadItem(document.uri, key, document.contentType, document.size, metadata)
+    BatchUploadItem(document.uri, key, document.contentType, document.size, metadata, document.sharedSource)
   }
 }
 

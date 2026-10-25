@@ -3,11 +3,54 @@ package com.jasongzy.s3pocket
 import com.jasongzy.s3pocket.data.transfer.TransferItem
 import com.jasongzy.s3pocket.data.transfer.TransferStatus
 import com.jasongzy.s3pocket.data.transfer.throttledProgress
+import com.jasongzy.s3pocket.ui.UploadResult
+import com.jasongzy.s3pocket.ui.ObjectsUiState
+import com.jasongzy.s3pocket.ui.consumeUploadResult
 import com.jasongzy.s3pocket.ui.uploadProgress
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
 import org.junit.Test
 
 class UploadProgressTest {
+  @Test
+  fun onlyASuccessfulSingleUploadExposesItsFinalKey() {
+    val state = ObjectsUiState(uploadKeyToOpen = "folder/image (1).jpg")
+    assertNull(state.uploadedObjectKey)
+    val completed = state.copy(uploadResult = UploadResult(1, 1))
+    assertEquals("folder/image (1).jpg", completed.uploadedObjectKey)
+    assertNull(completed.copy(uploadKeyToOpen = null).uploadedObjectKey)
+    assertNull(completed.copy(uploadResult = null).uploadedObjectKey)
+    listOf(UploadResult(0, 1), UploadResult(1, 2), UploadResult(2, 2)).forEach { result ->
+      assertNull(state.copy(uploadResult = result).uploadedObjectKey)
+    }
+  }
+
+  @Test
+  fun consecutiveCompletionsWithEqualCountsRemainDistinct() {
+    val first = UploadResult(1, 1)
+    val second = UploadResult(1, 1)
+    val state = MutableStateFlow(ObjectsUiState(uploadResult = first))
+    state.value = state.value.copy(uploadResult = second)
+    assertSame(second, state.value.uploadResult)
+    assertNotEquals(first, second)
+  }
+
+  @Test
+  fun delayedCompletionLeavesTheNextUploadIntact() {
+    val previousResult = UploadResult(1, 1)
+    val currentResult = UploadResult(1, 1)
+    val state = MutableStateFlow(ObjectsUiState(uploadKeyToOpen = "next.txt"))
+    assertNull(state.consumeUploadResult(previousResult))
+    assertEquals("next.txt", state.value.uploadKeyToOpen)
+    state.value = state.value.copy(uploadResult = currentResult)
+    assertNull(state.consumeUploadResult(previousResult))
+    assertSame(currentResult, state.value.uploadResult)
+    assertEquals("next.txt", state.consumeUploadResult(currentResult))
+    assertNull(state.value.uploadResult)
+    assertNull(state.value.uploadKeyToOpen)
+    assertNull(state.consumeUploadResult(currentResult))
+  }
+
   @Test
   fun progressPublishesPeriodicallyAndAtCompletion() {
     var now = 0L
